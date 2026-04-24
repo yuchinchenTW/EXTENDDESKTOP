@@ -26,7 +26,10 @@ namespace ExtentDesktop.Receiver
                 return;
             }
 
-            _client = new UdpClient(DiscoveryProtocol.BroadcastPort);
+            _client = new UdpClient(AddressFamily.InterNetwork);
+            _client.ExclusiveAddressUse = false;
+            _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            _client.Client.Bind(new IPEndPoint(IPAddress.Any, DiscoveryProtocol.BroadcastPort));
             _client.EnableBroadcast = true;
             _running = true;
             _thread = new Thread(ListenLoop);
