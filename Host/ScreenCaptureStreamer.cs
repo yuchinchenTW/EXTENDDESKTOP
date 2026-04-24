@@ -214,6 +214,8 @@ namespace ExtentDesktop.Host
                     {
                         throw new InvalidOperationException("BitBlt screen capture failed.");
                     }
+
+                    DrawCursor(targetDc, bounds);
                 }
                 finally
                 {
@@ -230,6 +232,87 @@ namespace ExtentDesktop.Host
                     _scaledGraphics.DrawImage(_captureBitmap, new Rectangle(Point.Empty, _scaledBitmap.Size));
                 }
             }
+
+            private static void DrawCursor(IntPtr targetDc, Rectangle bounds)
+            {
+                var ci = new CURSORINFO();
+                ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
+
+                if (!GetCursorInfo(ref ci) || ci.flags != CURSOR_SHOWING || ci.hCursor == IntPtr.Zero)
+                {
+                    return;
+                }
+
+                ICONINFO ii;
+                if (!GetIconInfo(ci.hCursor, out ii))
+                {
+                    return;
+                }
+
+                try
+                {
+                    var x = ci.ptScreenPos.x - ii.xHotspot - bounds.Left;
+                    var y = ci.ptScreenPos.y - ii.yHotspot - bounds.Top;
+                    DrawIconEx(targetDc, x, y, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+                }
+                finally
+                {
+                    if (ii.hbmMask != IntPtr.Zero)
+                    {
+                        DeleteObject(ii.hbmMask);
+                    }
+
+                    if (ii.hbmColor != IntPtr.Zero)
+                    {
+                        DeleteObject(ii.hbmColor);
+                    }
+                }
+            }
+
+            private const int CURSOR_SHOWING = 0x00000001;
+            private const int DI_NORMAL = 0x0003;
+
+            [StructLayout(LayoutKind.Sequential)]
+            private struct POINT
+            {
+                public int x;
+                public int y;
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            private struct CURSORINFO
+            {
+                public int cbSize;
+                public int flags;
+                public IntPtr hCursor;
+                public POINT ptScreenPos;
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            private struct ICONINFO
+            {
+                public bool fIcon;
+                public int xHotspot;
+                public int yHotspot;
+                public IntPtr hbmMask;
+                public IntPtr hbmColor;
+            }
+
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool GetCursorInfo(ref CURSORINFO pci);
+
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
+
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyHeight, int istepIfAniCur, IntPtr hbrFlickerFreeDraw, int diFlags);
+
+            [DllImport("gdi32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool DeleteObject(IntPtr hObject);
 
             [DllImport("user32.dll")]
             private static extern IntPtr GetDC(IntPtr hWnd);
