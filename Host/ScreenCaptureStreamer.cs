@@ -18,9 +18,11 @@ namespace ExtentDesktop.Host
 
         public static void StreamFrames(NetworkStream stream, object writeSync, CancellationToken token, int fps, Func<Rectangle> captureBoundsProvider)
         {
-            using (var capturer = new GdiCaptureSession(3840, 58L, captureBoundsProvider))
+            using (var capturer = new GdiCaptureSession(1920, 55L, captureBoundsProvider))
             {
-                var frameDelay = Math.Max(30, 1000 / Math.Max(1, fps));
+                var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                var nextFrameTicks = watch.ElapsedTicks;
 
                 while (!token.IsCancellationRequested)
                 {
@@ -36,9 +38,19 @@ namespace ExtentDesktop.Host
                         });
                     }
 
-                    if (token.WaitHandle.WaitOne(frameDelay))
+                    nextFrameTicks += targetFrameTicks;
+                    var remainingTicks = nextFrameTicks - watch.ElapsedTicks;
+                    if (remainingTicks > 0)
                     {
-                        return;
+                        var remainingMs = (int)(remainingTicks * 1000L / System.Diagnostics.Stopwatch.Frequency);
+                        if (remainingMs > 0 && token.WaitHandle.WaitOne(remainingMs))
+                        {
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        nextFrameTicks = watch.ElapsedTicks;
                     }
                 }
             }
