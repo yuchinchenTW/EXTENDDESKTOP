@@ -9,6 +9,7 @@ namespace ExtentDesktop.Receiver
 {
     internal sealed class ReceiverForm : Form
     {
+        private readonly Panel _topPanel;
         private readonly TextBox _hostTextBox;
         private readonly TextBox _portTextBox;
         private readonly TextBox _passwordTextBox;
@@ -37,7 +38,7 @@ namespace ExtentDesktop.Receiver
             StartPosition = FormStartPosition.CenterScreen;
             KeyPreview = true;
 
-            var topPanel = new Panel
+            _topPanel = new Panel
             {
                 Dock = DockStyle.Top,
                 Height = 92
@@ -138,17 +139,17 @@ namespace ExtentDesktop.Receiver
                 Text = "Hosts on the same LAN auto-appear on the right. Select one to auto-fill host and port."
             };
 
-            topPanel.Controls.Add(hostLabel);
-            topPanel.Controls.Add(_hostTextBox);
-            topPanel.Controls.Add(portLabel);
-            topPanel.Controls.Add(_portTextBox);
-            topPanel.Controls.Add(passwordLabel);
-            topPanel.Controls.Add(_passwordTextBox);
-            topPanel.Controls.Add(_connectButton);
-            topPanel.Controls.Add(_disconnectButton);
-            topPanel.Controls.Add(_fullscreenButton);
-            topPanel.Controls.Add(_statusLabel);
-            topPanel.Controls.Add(_infoLabel);
+            _topPanel.Controls.Add(hostLabel);
+            _topPanel.Controls.Add(_hostTextBox);
+            _topPanel.Controls.Add(portLabel);
+            _topPanel.Controls.Add(_portTextBox);
+            _topPanel.Controls.Add(passwordLabel);
+            _topPanel.Controls.Add(_passwordTextBox);
+            _topPanel.Controls.Add(_connectButton);
+            _topPanel.Controls.Add(_disconnectButton);
+            _topPanel.Controls.Add(_fullscreenButton);
+            _topPanel.Controls.Add(_statusLabel);
+            _topPanel.Controls.Add(_infoLabel);
 
             _hostsListView = new ListView
             {
@@ -181,7 +182,7 @@ namespace ExtentDesktop.Receiver
             contentPanel.Controls.Add(_hostsListView);
 
             Controls.Add(contentPanel);
-            Controls.Add(topPanel);
+            Controls.Add(_topPanel);
 
             FormClosed += ReceiverForm_FormClosed;
             KeyDown += ReceiverForm_KeyDown;
@@ -441,6 +442,8 @@ namespace ExtentDesktop.Receiver
                 FormBorderStyle = FormBorderStyle.None;
                 WindowState = FormWindowState.Normal;
                 Bounds = Screen.FromControl(this).Bounds;
+                _topPanel.Visible = false;
+                _hostsListView.Visible = false;
                 _isFullscreen = true;
                 _fullscreenButton.Text = "Exit Fullscreen";
                 return;
@@ -448,6 +451,8 @@ namespace ExtentDesktop.Receiver
 
             FormBorderStyle = _normalBorderStyle;
             Bounds = _normalBounds;
+            _topPanel.Visible = true;
+            _hostsListView.Visible = true;
             _isFullscreen = false;
             _fullscreenButton.Text = "Fullscreen";
         }
