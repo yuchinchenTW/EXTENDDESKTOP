@@ -16,6 +16,7 @@ namespace ExtentDesktop.Host
         private TcpListener _listener;
         private Thread _acceptThread;
         private CancellationTokenSource _sessionTokenSource;
+        private HostDiscoveryBroadcaster _discoveryBroadcaster;
         private volatile bool _running;
         private string _password;
         private int _port;
@@ -41,6 +42,8 @@ namespace ExtentDesktop.Host
             _captureLabelProvider = captureLabelProvider;
             _listener = new TcpListener(IPAddress.Any, port);
             _listener.Start();
+            _discoveryBroadcaster = new HostDiscoveryBroadcaster(GetCaptureLabel);
+            _discoveryBroadcaster.Start(port);
             _running = true;
             _acceptThread = new Thread(AcceptLoop);
             _acceptThread.IsBackground = true;
@@ -55,6 +58,12 @@ namespace ExtentDesktop.Host
             if (_sessionTokenSource != null)
             {
                 _sessionTokenSource.Cancel();
+            }
+
+            if (_discoveryBroadcaster != null)
+            {
+                _discoveryBroadcaster.Dispose();
+                _discoveryBroadcaster = null;
             }
 
             if (_listener != null)

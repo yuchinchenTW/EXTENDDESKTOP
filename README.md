@@ -1,18 +1,19 @@
 # ExtentDesktop
 
-`ExtentDesktop` is a small Windows pair of apps that stream one chosen desktop surface from a desktop PC to a laptop.
+`ExtentDesktop` is a small Windows host/receiver pair for showing one chosen desktop surface from a desktop PC on a laptop over the LAN.
 
-## What It Can Do
+## What It Does
 
-- Mirror the combined desktop or one chosen display to a laptop receiver.
-- Help with the "third monitor" workflow if the desktop PC already has a virtual display driver installed.
-- Run as two simple WinForms executables with no extra framework install required on normal Windows machines.
+- Streams `All Displays` or one selected display from the desktop PC to the laptop.
+- Works well with a virtual display driver, so the laptop can show that virtual monitor.
+- Auto-discovers available hosts on the same LAN inside the receiver UI.
+- Builds into two simple WinForms executables with the built-in .NET Framework compiler already present on most Windows machines.
 
-## What It Cannot Do By Itself
+## What It Does Not Do By Itself
 
-This project does **not** create a brand-new Windows monitor on its own.
+This project does **not** create a new Windows monitor on its own.
 
-For a laptop to behave like a true extra extended desktop target, the desktop PC must first expose an additional monitor through a virtual or indirect display driver. After that, this project can stream that new virtual monitor to the laptop.
+For the laptop to behave like a true extra extended desktop target, the desktop PC must first expose an additional monitor through a virtual or indirect display driver. After that, `ExtentDesktop` can stream that extra virtual monitor to the laptop.
 
 Without that driver layer:
 
@@ -23,8 +24,8 @@ Without that driver layer:
 ## Structure
 
 - `Host`: runs on the desktop PC and streams the selected display area
-- `Receiver`: runs on the laptop and displays the stream
-- `Shared`: tiny TCP auth/frame protocol
+- `Receiver`: runs on the laptop and shows the stream
+- `Shared`: small TCP auth/frame protocol plus LAN discovery protocol
 
 ## Build
 
@@ -34,14 +35,34 @@ Without that driver layer:
 
 Outputs go to `dist\`.
 
-## Usage
+## Normal Setup Flow
 
-1. Run `ExtentDesktopHost.exe` on the desktop PC.
-2. Pick a port, password, and display source.
-3. Run `ExtentDesktopReceiver.exe` on the laptop.
-4. Enter the desktop PC's IP, port, and password.
+### Desktop PC
+
+1. Install and enable your virtual display driver.
+2. In the virtual display driver control app, create at least one virtual monitor.
+3. Open Windows `Settings > System > Display` and confirm the new display exists.
+4. Set Windows to `Extend these displays`.
+5. Arrange the monitors so the virtual display is where you want it.
+6. Run `ExtentDesktopHost.exe`.
+7. Choose the virtual display in the `Display` dropdown.
+8. Set a port and password, then click `Start Host`.
+
+### Laptop
+
+1. Run `ExtentDesktopReceiver.exe`.
+2. Wait for the desktop PC to appear in the host list on the right.
+3. Click the discovered host to auto-fill IP and port.
+4. Enter the same password.
 5. Click `Connect`.
-6. Use `Fullscreen` or `F11` on the receiver.
+6. Use `Fullscreen` or `F11` if you want the laptop screen dedicated to that display.
+
+## When Host Discovery Does Not Show Up
+
+- Make sure both machines are on the same LAN.
+- Make sure the desktop host is already running.
+- Allow the app through Windows Firewall when prompted.
+- If needed, connect manually by entering the desktop PC's IP and port.
 
 ## Practical Reality
 

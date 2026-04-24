@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
+using ExtentDesktop.Shared;
 
 namespace ExtentDesktop.Receiver
 {
@@ -12,14 +15,19 @@ namespace ExtentDesktop.Receiver
         private readonly Button _connectButton;
         private readonly Button _disconnectButton;
         private readonly Button _fullscreenButton;
+        private readonly ListView _hostsListView;
         private readonly PictureBox _pictureBox;
         private readonly Label _statusLabel;
+        private readonly Label _infoLabel;
+        private readonly Timer _discoveryRefreshTimer;
 
         private DisplayReceiverClient _client;
+        private HostDiscoveryListener _discoveryListener;
         private Bitmap _currentFrame;
         private Rectangle _normalBounds;
         private FormBorderStyle _normalBorderStyle;
         private bool _isFullscreen;
+        private readonly Dictionary<string, DiscoveredHostInfo> _discoveredHosts = new Dictionary<string, DiscoveredHostInfo>();
 
         public ReceiverForm()
         {
@@ -32,7 +40,7 @@ namespace ExtentDesktop.Receiver
             var topPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 72
+                Height = 92
             };
 
             var hostLabel = new Label
@@ -121,6 +129,15 @@ namespace ExtentDesktop.Receiver
                 Text = "Status: Not connected."
             };
 
+            _infoLabel = new Label
+            {
+                Left = 12,
+                Top = 64,
+                Width = 1180,
+                Height = 18,
+                Text = "Hosts on the same LAN auto-appear on the right. Select one to auto-fill host and port."
+            };
+
             topPanel.Controls.Add(hostLabel);
             topPanel.Controls.Add(_hostTextBox);
             topPanel.Controls.Add(portLabel);
@@ -131,6 +148,23 @@ namespace ExtentDesktop.Receiver
             topPanel.Controls.Add(_disconnectButton);
             topPanel.Controls.Add(_fullscreenButton);
             topPanel.Controls.Add(_statusLabel);
+            topPanel.Controls.Add(_infoLabel);
+
+            _hostsListView = new ListView
+            {
+                Dock = DockStyle.Right,
+                Width = 360,
+                View = View.Details,
+                FullRowSelect = true,
+                GridLines = true,
+                HideSelection = false
+            };
+            _hostsListView.Columns.Add("Name", 110);
+            _hostsListView.Columns.Add("IP", 105);
+            _hostsListView.Columns.Add("Port", 45);
+            _hostsListView.Columns.Add("Display", 80);
+            _hostsListView.SelectedIndexChanged += HostsListView_SelectedIndexChanged;
+            _hostsListView.DoubleClick += HostsListView_DoubleClick;
 
             _pictureBox = new PictureBox
             {
@@ -139,15 +173,42 @@ namespace ExtentDesktop.Receiver
                 SizeMode = PictureBoxSizeMode.Zoom
             };
 
-            Controls.Add(_pictureBox);
+            var contentPanel = new Panel
+            {
+                Dock = DockStyle.Fill
+            };
+            contentPanel.Controls.Add(_pictureBox);
+            contentPanel.Controls.Add(_hostsListView);
+
+            Controls.Add(contentPanel);
             Controls.Add(topPanel);
 
             FormClosed += ReceiverForm_FormClosed;
             KeyDown += ReceiverForm_KeyDown;
+
+            _discoveryListener = new HostDiscoveryListener(OnHostDiscovered);
+            _discoveryListener.Start();
+
+            _discoveryRefreshTimer = new Timer();
+            _discoveryRefreshTimer.Interval = 1000;
+            _discoveryRefreshTimer.Tick += DiscoveryRefreshTimer_Tick;
+            _discoveryRefreshTimer.Start();
         }
 
         private void ReceiverForm_FormClosed(object sender, FormClosedEventArgs e)
         {
+            if (_discoveryRefreshTimer != null)
+            {
+                _discoveryRefreshTimer.Stop();
+                _discoveryRefreshTimer.Dispose();
+            }
+
+            if (_discoveryListener != null)
+            {
+                _discoveryListener.Dispose();
+                _discoveryListener = null;
+            }
+
             if (_client != null)
             {
                 _client.Dispose();
@@ -159,6 +220,11 @@ namespace ExtentDesktop.Receiver
                 _currentFrame.Dispose();
                 _currentFrame = null;
             }
+        }
+
+        private void DiscoveryRefreshTimer_Tick(object sender, EventArgs e)
+        {
+            RefreshDiscoveredHosts();
         }
 
         private void ConnectButton_Click(object sender, EventArgs e)
@@ -198,6 +264,33 @@ namespace ExtentDesktop.Receiver
             Disconnect();
         }
 
+        private void HostsListView_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_hostsListView.SelectedItems.Count == 0)
+            {
+                return;
+            }
+
+            var info = _hostsListView.SelectedItems[0].Tag as DiscoveredHostInfo;
+            if (info == null)
+            {
+                return;
+            }
+
+            _hostTextBox.Text = info.HostAddress;
+            _portTextBox.Text = info.HostPort.ToString();
+        }
+
+        private void HostsListView_DoubleClick(object sender, EventArgs e)
+        {
+            if (_hostsListView.SelectedItems.Count == 0 || !_connectButton.Enabled)
+            {
+                return;
+            }
+
+            ConnectButton_Click(sender, e);
+        }
+
         private void FullscreenButton_Click(object sender, EventArgs e)
         {
             ToggleFullscreen();
@@ -230,6 +323,23 @@ namespace ExtentDesktop.Receiver
             {
                 ResetConnectionUiOnly();
             }
+        }
+
+        private void OnHostDiscovered(DiscoveredHostInfo host)
+        {
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action<DiscoveredHostInfo>(OnHostDiscovered), host);
+                return;
+            }
+
+            _discoveredHosts[BuildHostKey(host)] = host;
+            RefreshDiscoveredHosts();
         }
 
         private void UpdateFrame(Bitmap frame, int width, int height)
@@ -276,6 +386,50 @@ namespace ExtentDesktop.Receiver
             _hostTextBox.Enabled = true;
             _portTextBox.Enabled = true;
             _passwordTextBox.Enabled = true;
+        }
+
+        private void RefreshDiscoveredHosts()
+        {
+            var now = DateTime.UtcNow;
+            var expiredKeys = _discoveredHosts
+                .Where(pair => (now - pair.Value.LastSeenUtc).TotalMilliseconds > DiscoveryProtocol.HostTimeoutMs)
+                .Select(pair => pair.Key)
+                .ToList();
+
+            foreach (var key in expiredKeys)
+            {
+                _discoveredHosts.Remove(key);
+            }
+
+            var selectedKey = _hostsListView.SelectedItems.Count > 0 ? _hostsListView.SelectedItems[0].Name : null;
+
+            _hostsListView.BeginUpdate();
+            _hostsListView.Items.Clear();
+
+            foreach (var host in _discoveredHosts.Values
+                .OrderBy(host => host.MachineName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(host => host.HostAddress, StringComparer.Ordinal))
+            {
+                var item = new ListViewItem(string.IsNullOrWhiteSpace(host.MachineName) ? host.HostAddress : host.MachineName);
+                item.Name = BuildHostKey(host);
+                item.Tag = host;
+                item.SubItems.Add(host.HostAddress);
+                item.SubItems.Add(host.HostPort.ToString());
+                item.SubItems.Add(string.IsNullOrWhiteSpace(host.DisplayLabel) ? "-" : host.DisplayLabel);
+                _hostsListView.Items.Add(item);
+
+                if (!string.IsNullOrEmpty(selectedKey) && string.Equals(selectedKey, item.Name, StringComparison.Ordinal))
+                {
+                    item.Selected = true;
+                }
+            }
+
+            _hostsListView.EndUpdate();
+        }
+
+        private static string BuildHostKey(DiscoveredHostInfo host)
+        {
+            return host.HostAddress + ":" + host.HostPort;
         }
 
         private void ToggleFullscreen()

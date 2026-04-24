@@ -22,6 +22,7 @@ $refs = @(
 
 $shared = @(
     (Join-Path $root "Shared\Protocol.cs")
+    (Join-Path $root "Shared\DiscoveryProtocol.cs")
 )
 
 $hostSources = @(
@@ -29,12 +30,14 @@ $hostSources = @(
     (Join-Path $root "Host\HostForm.cs")
     (Join-Path $root "Host\DisplayHostServer.cs")
     (Join-Path $root "Host\ScreenCaptureStreamer.cs")
+    (Join-Path $root "Host\HostDiscoveryBroadcaster.cs")
 ) + $shared
 
 $receiverSources = @(
     (Join-Path $root "Receiver\Program.cs")
     (Join-Path $root "Receiver\ReceiverForm.cs")
     (Join-Path $root "Receiver\DisplayReceiverClient.cs")
+    (Join-Path $root "Receiver\HostDiscoveryListener.cs")
 ) + $shared
 
 $hostOut = "/out:" + (Join-Path $outDir "ExtentDesktopHost.exe")
