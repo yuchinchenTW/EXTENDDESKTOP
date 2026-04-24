@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Linq;
 using System.Windows.Forms;
 using ExtentDesktop.Shared;
@@ -167,7 +168,7 @@ namespace ExtentDesktop.Receiver
             _hostsListView.SelectedIndexChanged += HostsListView_SelectedIndexChanged;
             _hostsListView.DoubleClick += HostsListView_DoubleClick;
 
-            _pictureBox = new PictureBox
+            _pictureBox = new HqPictureBox
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.Black,
@@ -455,6 +456,18 @@ namespace ExtentDesktop.Receiver
             _hostsListView.Visible = true;
             _isFullscreen = false;
             _fullscreenButton.Text = "Fullscreen";
+        }
+
+        private sealed class HqPictureBox : PictureBox
+        {
+            protected override void OnPaint(PaintEventArgs pe)
+            {
+                pe.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                pe.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                pe.Graphics.SmoothingMode = SmoothingMode.None;
+                pe.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+                base.OnPaint(pe);
+            }
         }
     }
 }

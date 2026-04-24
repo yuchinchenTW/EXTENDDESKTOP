@@ -18,7 +18,7 @@ namespace ExtentDesktop.Host
 
         public static void StreamFrames(NetworkStream stream, object writeSync, CancellationToken token, int fps, Func<Rectangle> captureBoundsProvider)
         {
-            using (var capturer = new GdiCaptureSession(1920, 55L, captureBoundsProvider))
+            using (var capturer = new GdiCaptureSession(1920, 85L, captureBoundsProvider))
             {
                 var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
                 var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -167,9 +167,9 @@ namespace ExtentDesktop.Host
                     _scaledBitmap = new Bitmap(scaledWidth, scaledHeight, PixelFormat.Format24bppRgb);
                     _scaledGraphics = Graphics.FromImage(_scaledBitmap);
                     _scaledGraphics.CompositingMode = CompositingMode.SourceCopy;
-                    _scaledGraphics.CompositingQuality = CompositingQuality.HighSpeed;
-                    _scaledGraphics.InterpolationMode = InterpolationMode.Low;
-                    _scaledGraphics.PixelOffsetMode = PixelOffsetMode.HighSpeed;
+                    _scaledGraphics.CompositingQuality = CompositingQuality.HighQuality;
+                    _scaledGraphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    _scaledGraphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     _scaledGraphics.SmoothingMode = SmoothingMode.None;
                 }
 
