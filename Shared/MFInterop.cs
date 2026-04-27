@@ -31,6 +31,9 @@ namespace ExtentDesktop.Shared
         public static readonly Guid CODECAPI_AVEncMPVGOPSize = new Guid("95F31B26-95A4-4DA1-AE8B-7595A09EB2EE");
 
         public static readonly Guid IID_ICodecAPI = new Guid("901db4c7-31ce-41a2-85dc-8fa0bf41b8da");
+
+        public static readonly Guid MFT_TRANSFORM_ASYNC = new Guid("f81a699a-649a-497d-8c73-29f8fed6ad7a");
+        public static readonly Guid MFT_TRANSFORM_ASYNC_UNLOCK = new Guid("e5666d6b-3422-4eb6-a421-da7db1f8e207");
     }
 
     internal static class MFConstants
@@ -354,12 +357,36 @@ namespace ExtentDesktop.Shared
 
     internal static class MFHelpers
     {
+        private static readonly object _logSync = new object();
+
         public static void Check(int hr, string what)
         {
             if (hr < 0)
             {
                 throw new InvalidOperationException(what + " failed with HRESULT 0x" + hr.ToString("X8"));
             }
+        }
+
+        public static void Log(string message)
+        {
+            try
+            {
+                var dir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                var path = System.IO.Path.Combine(dir, "extentdesktop-error.log");
+                var line = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] [trace] " + message + "\r\n";
+                lock (_logSync)
+                {
+                    System.IO.File.AppendAllText(path, line);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        public static void LogHr(string what, int hr)
+        {
+            Log(what + " -> 0x" + hr.ToString("X8"));
         }
 
         public static ulong PackUInt64(uint high, uint low)

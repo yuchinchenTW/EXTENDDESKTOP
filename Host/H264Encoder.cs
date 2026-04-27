@@ -121,57 +121,119 @@ namespace ExtentDesktop.Host
 
         private void CreateEncoder(int bitrate)
         {
+            MFHelpers.Log("=== H264Encoder.CreateEncoder begin: " + _width + "x" + _height + "@" + _fps + " bitrate=" + bitrate + " ===");
+
             var clsid = MFGuids.CLSID_CMSH264EncoderMFT;
             var iid = new Guid("bf94c121-5b05-4e6f-8000-ba598961414d");
             object encoderObj;
-            MFHelpers.Check(MFNative.CoCreateInstance(ref clsid, IntPtr.Zero, MFConstants.CLSCTX_INPROC_SERVER, ref iid, out encoderObj), "CoCreateInstance(H264 Encoder)");
+            int hr = MFNative.CoCreateInstance(ref clsid, IntPtr.Zero, MFConstants.CLSCTX_INPROC_SERVER, ref iid, out encoderObj);
+            MFHelpers.LogHr("CoCreateInstance(H264 Encoder)", hr);
+            MFHelpers.Check(hr, "CoCreateInstance(H264 Encoder)");
             _encoder = (IMFTransform)encoderObj;
 
+            UnlockAsyncIfNeeded();
+            ConfigureLowLatencyAttribute();
             SetOutputTypeWithFallbacks(bitrate);
 
             var inputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_NV12, _width, _height, _fps, 1);
             try
             {
-                MFHelpers.Check(_encoder.SetInputType(0, inputType, 0), "SetInputType(NV12)");
+                int inputHr = _encoder.SetInputType(0, inputType, 0);
+                MFHelpers.LogHr("SetInputType(NV12)", inputHr);
+                MFHelpers.Check(inputHr, "SetInputType(NV12)");
             }
             finally
             {
                 Marshal.ReleaseComObject(inputType);
             }
+        }
 
+        private void UnlockAsyncIfNeeded()
+        {
             try
             {
                 IMFAttributes attrs;
-                if (_encoder.GetAttributes(out attrs) == 0 && attrs != null)
+                int hr = _encoder.GetAttributes(out attrs);
+                MFHelpers.LogHr("GetAttributes (for ASYNC check)", hr);
+                if (hr < 0 || attrs == null) return;
+
+                try
                 {
-                    try
+                    uint asyncFlag = 0;
+                    var asyncKey = MFGuids.MFT_TRANSFORM_ASYNC;
+                    int getHr = attrs.GetUINT32(ref asyncKey, out asyncFlag);
+                    MFHelpers.Log("MFT_TRANSFORM_ASYNC getHr=0x" + getHr.ToString("X8") + " value=" + asyncFlag);
+
+                    if (getHr == 0 && asyncFlag != 0)
                     {
-                        var lowLatencyAttr = MFGuids.MF_LOW_LATENCY;
-                        attrs.SetUINT32(ref lowLatencyAttr, 1);
-                    }
-                    finally
-                    {
-                        Marshal.ReleaseComObject(attrs);
+                        var unlockKey = MFGuids.MFT_TRANSFORM_ASYNC_UNLOCK;
+                        int setHr = attrs.SetUINT32(ref unlockKey, 1);
+                        MFHelpers.LogHr("SetUINT32(ASYNC_UNLOCK)", setHr);
                     }
                 }
+                finally
+                {
+                    Marshal.ReleaseComObject(attrs);
+                }
             }
-            catch
+            catch (Exception ex)
             {
+                MFHelpers.Log("UnlockAsyncIfNeeded threw: " + ex.Message);
+            }
+        }
+
+        private void ConfigureLowLatencyAttribute()
+        {
+            try
+            {
+                IMFAttributes attrs;
+                if (_encoder.GetAttributes(out attrs) != 0 || attrs == null) return;
+
+                try
+                {
+                    var lowLatencyAttr = MFGuids.MF_LOW_LATENCY;
+                    int hr = attrs.SetUINT32(ref lowLatencyAttr, 1);
+                    MFHelpers.LogHr("SetUINT32(MF_LOW_LATENCY)", hr);
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(attrs);
+                }
+            }
+            catch (Exception ex)
+            {
+                MFHelpers.Log("ConfigureLowLatencyAttribute threw: " + ex.Message);
             }
         }
 
         private void SetOutputTypeWithFallbacks(int bitrate)
         {
-            int hr = TrySetOutputType(bitrate, profile: 0, level: 0);
+            int hr;
+
+            MFHelpers.Log("Trying SetOutputType: no profile, no level, bitrate=" + bitrate);
+            hr = TrySetOutputType(bitrate, profile: 0, level: 0);
+            MFHelpers.LogHr("  result", hr);
             if (hr >= 0) return;
 
-            hr = TrySetOutputType(bitrate, profile: MFConstants.eAVEncH264VProfile_Main, level: 0);
-            if (hr >= 0) return;
-
+            MFHelpers.Log("Trying SetOutputType: Base profile + Level 4.2, bitrate=" + bitrate);
             hr = TrySetOutputType(bitrate, profile: MFConstants.eAVEncH264VProfile_Base, level: 42);
+            MFHelpers.LogHr("  result", hr);
             if (hr >= 0) return;
 
-            hr = TrySetOutputType(bitrate / 2, profile: 0, level: 0);
+            MFHelpers.Log("Trying SetOutputType: Main profile, bitrate=" + bitrate);
+            hr = TrySetOutputType(bitrate, profile: MFConstants.eAVEncH264VProfile_Main, level: 0);
+            MFHelpers.LogHr("  result", hr);
+            if (hr >= 0) return;
+
+            int halfBitrate = Math.Max(1500000, bitrate / 2);
+            MFHelpers.Log("Trying SetOutputType: no profile, halved bitrate=" + halfBitrate);
+            hr = TrySetOutputType(halfBitrate, profile: 0, level: 0);
+            MFHelpers.LogHr("  result", hr);
+            if (hr >= 0) return;
+
+            MFHelpers.Log("Trying SetOutputType: from GetOutputAvailableType template");
+            hr = TrySetOutputTypeFromAvailable(bitrate);
+            MFHelpers.LogHr("  result", hr);
             if (hr >= 0) return;
 
             MFHelpers.Check(hr, "SetOutputType(H264) [all fallbacks]");
@@ -184,20 +246,20 @@ namespace ExtentDesktop.Host
             {
                 var bitrateKey = MFGuids.MF_MT_AVG_BITRATE;
                 int hr = outputType.SetUINT32(ref bitrateKey, (uint)bitrate);
-                if (hr < 0) return hr;
+                if (hr < 0) { MFHelpers.LogHr("  SetUINT32(BITRATE)", hr); return hr; }
 
                 if (profile != 0)
                 {
                     var profileKey = MFGuids.MF_MT_MPEG2_PROFILE;
                     hr = outputType.SetUINT32(ref profileKey, (uint)profile);
-                    if (hr < 0) return hr;
+                    if (hr < 0) { MFHelpers.LogHr("  SetUINT32(PROFILE)", hr); return hr; }
                 }
 
                 if (level != 0)
                 {
                     var levelKey = MFGuids.MF_MT_MPEG2_LEVEL;
                     hr = outputType.SetUINT32(ref levelKey, (uint)level);
-                    if (hr < 0) return hr;
+                    if (hr < 0) { MFHelpers.LogHr("  SetUINT32(LEVEL)", hr); return hr; }
                 }
 
                 return _encoder.SetOutputType(0, outputType, 0);
@@ -206,6 +268,58 @@ namespace ExtentDesktop.Host
             {
                 Marshal.ReleaseComObject(outputType);
             }
+        }
+
+        private int TrySetOutputTypeFromAvailable(int bitrate)
+        {
+            for (int i = 0; i < 8; i++)
+            {
+                IMFMediaType template;
+                int getHr = _encoder.GetOutputAvailableType(0, i, out template);
+                if (getHr < 0)
+                {
+                    MFHelpers.LogHr("  GetOutputAvailableType[" + i + "]", getHr);
+                    return getHr;
+                }
+
+                try
+                {
+                    var subKey = MFGuids.MF_MT_SUBTYPE;
+                    Guid sub;
+                    if (template.GetGUID(ref subKey, out sub) != 0) continue;
+                    MFHelpers.Log("  available[" + i + "] subtype=" + sub);
+                    if (sub != MFGuids.MFVideoFormat_H264) continue;
+
+                    var majorKey = MFGuids.MF_MT_MAJOR_TYPE;
+                    var majorVal = MFGuids.MFMediaType_Video;
+                    template.SetGUID(ref majorKey, ref majorVal);
+
+                    var sizeKey = MFGuids.MF_MT_FRAME_SIZE;
+                    template.SetUINT64(ref sizeKey, MFHelpers.PackUInt64((uint)_width, (uint)_height));
+
+                    var rateKey = MFGuids.MF_MT_FRAME_RATE;
+                    template.SetUINT64(ref rateKey, MFHelpers.PackUInt64((uint)_fps, 1));
+
+                    var aspectKey = MFGuids.MF_MT_PIXEL_ASPECT_RATIO;
+                    template.SetUINT64(ref aspectKey, MFHelpers.PackUInt64(1, 1));
+
+                    var interlaceKey = MFGuids.MF_MT_INTERLACE_MODE;
+                    template.SetUINT32(ref interlaceKey, (uint)MFConstants.MFVideoInterlace_Progressive);
+
+                    var bitrateKey = MFGuids.MF_MT_AVG_BITRATE;
+                    template.SetUINT32(ref bitrateKey, (uint)bitrate);
+
+                    int setHr = _encoder.SetOutputType(0, template, 0);
+                    MFHelpers.LogHr("  SetOutputType(template[" + i + "])", setHr);
+                    if (setHr >= 0) return setHr;
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(template);
+                }
+            }
+
+            return unchecked((int)0x80004005);
         }
 
         private void ConfigureCodecApi()
