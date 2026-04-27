@@ -138,20 +138,53 @@ namespace ExtentDesktop.Receiver
             var clsid = MFGuids.CLSID_CMSH264DecoderMFT;
             var iid = new Guid("bf94c121-5b05-4e6f-8000-ba598961414d");
             object decoderObj;
-            MFHelpers.Check(MFNative.CoCreateInstance(ref clsid, IntPtr.Zero, MFConstants.CLSCTX_INPROC_SERVER, ref iid, out decoderObj), "CoCreateInstance(H264 Decoder)");
+            int hr = MFNative.CoCreateInstance(ref clsid, IntPtr.Zero, MFConstants.CLSCTX_INPROC_SERVER, ref iid, out decoderObj);
+            MFHelpers.LogHr("CoCreateInstance(H264 Decoder)", hr);
+            MFHelpers.Check(hr, "CoCreateInstance(H264 Decoder)");
             _decoder = (IMFTransform)decoderObj;
 
-            var inputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_H264, _expectedWidth, _expectedHeight, 60, 1);
-            try
+            SetInputTypeFromAvailable();
+            TryNegotiateOutputType();
+        }
+
+        private void SetInputTypeFromAvailable()
+        {
+            for (int i = 0; i < 16; i++)
             {
-                MFHelpers.Check(_decoder.SetInputType(0, inputType, 0), "SetInputType(H264)");
-            }
-            finally
-            {
-                Marshal.ReleaseComObject(inputType);
+                IMFMediaType template;
+                int getHr = _decoder.GetInputAvailableType(0, i, out template);
+                if (getHr < 0)
+                {
+                    MFHelpers.LogHr("decoder GetInputAvailableType[" + i + "]", getHr);
+                    MFHelpers.Check(getHr, "GetInputAvailableType (no H264 found)");
+                    return;
+                }
+
+                try
+                {
+                    var subKey = MFGuids.MF_MT_SUBTYPE;
+                    Guid sub;
+                    if (template.GetGUID(ref subKey, out sub) != 0) continue;
+                    MFHelpers.Log("decoder input available[" + i + "] subtype=" + sub);
+                    if (sub != MFGuids.MFVideoFormat_H264) continue;
+
+                    var sizeKey = MFGuids.MF_MT_FRAME_SIZE;
+                    template.SetUINT64(ref sizeKey, MFHelpers.PackUInt64((uint)_expectedWidth, (uint)_expectedHeight));
+
+                    var rateKey = MFGuids.MF_MT_FRAME_RATE;
+                    template.SetUINT64(ref rateKey, MFHelpers.PackUInt64(60, 1));
+
+                    int setHr = _decoder.SetInputType(0, template, 0);
+                    MFHelpers.LogHr("decoder SetInputType(template[" + i + "] H264)", setHr);
+                    if (setHr >= 0) return;
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(template);
+                }
             }
 
-            TryNegotiateOutputType();
+            MFHelpers.Check(unchecked((int)0x80004005), "decoder SetInputType(H264) [no template accepted]");
         }
 
         private void TryNegotiateOutputType()

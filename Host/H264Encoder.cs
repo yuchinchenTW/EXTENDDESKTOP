@@ -134,18 +134,53 @@ namespace ExtentDesktop.Host
             UnlockAsyncIfNeeded();
             ConfigureLowLatencyAttribute();
             SetOutputTypeWithFallbacks(bitrate);
+            SetInputTypeFromAvailable();
+        }
 
-            var inputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_NV12, _width, _height, _fps, 1);
-            try
+        private void SetInputTypeFromAvailable()
+        {
+            for (int i = 0; i < 16; i++)
             {
-                int inputHr = _encoder.SetInputType(0, inputType, 0);
-                MFHelpers.LogHr("SetInputType(NV12)", inputHr);
-                MFHelpers.Check(inputHr, "SetInputType(NV12)");
+                IMFMediaType template;
+                int getHr = _encoder.GetInputAvailableType(0, i, out template);
+                if (getHr < 0)
+                {
+                    MFHelpers.LogHr("GetInputAvailableType[" + i + "]", getHr);
+                    MFHelpers.Check(getHr, "GetInputAvailableType (no NV12 found)");
+                    return;
+                }
+
+                try
+                {
+                    var subKey = MFGuids.MF_MT_SUBTYPE;
+                    Guid sub;
+                    if (template.GetGUID(ref subKey, out sub) != 0) continue;
+                    MFHelpers.Log("input available[" + i + "] subtype=" + sub);
+                    if (sub != MFGuids.MFVideoFormat_NV12) continue;
+
+                    var sizeKey = MFGuids.MF_MT_FRAME_SIZE;
+                    template.SetUINT64(ref sizeKey, MFHelpers.PackUInt64((uint)_width, (uint)_height));
+
+                    var rateKey = MFGuids.MF_MT_FRAME_RATE;
+                    template.SetUINT64(ref rateKey, MFHelpers.PackUInt64((uint)_fps, 1));
+
+                    var aspectKey = MFGuids.MF_MT_PIXEL_ASPECT_RATIO;
+                    template.SetUINT64(ref aspectKey, MFHelpers.PackUInt64(1, 1));
+
+                    var interlaceKey = MFGuids.MF_MT_INTERLACE_MODE;
+                    template.SetUINT32(ref interlaceKey, (uint)MFConstants.MFVideoInterlace_Progressive);
+
+                    int setHr = _encoder.SetInputType(0, template, 0);
+                    MFHelpers.LogHr("SetInputType(template[" + i + "] NV12)", setHr);
+                    if (setHr >= 0) return;
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(template);
+                }
             }
-            finally
-            {
-                Marshal.ReleaseComObject(inputType);
-            }
+
+            MFHelpers.Check(unchecked((int)0x80004005), "SetInputType(NV12) [no template accepted]");
         }
 
         private void UnlockAsyncIfNeeded()
