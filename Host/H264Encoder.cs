@@ -448,10 +448,16 @@ namespace ExtentDesktop.Host
 
         private void StartStreaming()
         {
-            MFHelpers.Check(_encoder.ProcessMessage(MFConstants.MFT_MESSAGE_COMMAND_FLUSH, IntPtr.Zero), "FLUSH");
-            MFHelpers.Check(_encoder.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, IntPtr.Zero), "BEGIN_STREAMING");
-            MFHelpers.Check(_encoder.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_START_OF_STREAM, IntPtr.Zero), "START_OF_STREAM");
+            int hr = _encoder.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, IntPtr.Zero);
+            MFHelpers.LogHr("BEGIN_STREAMING", hr);
+            MFHelpers.Check(hr, "BEGIN_STREAMING");
+
+            hr = _encoder.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_START_OF_STREAM, IntPtr.Zero);
+            MFHelpers.LogHr("START_OF_STREAM", hr);
+            MFHelpers.Check(hr, "START_OF_STREAM");
+
             _streaming = true;
+            MFHelpers.Log("=== H264Encoder ready ===");
         }
 
         private void FillInputSample(IntPtr bgraData, int bgraStride, out IMFSample sample)
