@@ -127,6 +127,18 @@ namespace ExtentDesktop.Host
             MFHelpers.Check(MFNative.CoCreateInstance(ref clsid, IntPtr.Zero, MFConstants.CLSCTX_INPROC_SERVER, ref iid, out encoderObj), "CoCreateInstance(H264 Encoder)");
             _encoder = (IMFTransform)encoderObj;
 
+            SetOutputTypeWithFallbacks(bitrate);
+
+            var inputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_NV12, _width, _height, _fps, 1);
+            try
+            {
+                MFHelpers.Check(_encoder.SetInputType(0, inputType, 0), "SetInputType(NV12)");
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(inputType);
+            }
+
             try
             {
                 IMFAttributes attrs;
@@ -146,31 +158,53 @@ namespace ExtentDesktop.Host
             catch
             {
             }
+        }
 
+        private void SetOutputTypeWithFallbacks(int bitrate)
+        {
+            int hr = TrySetOutputType(bitrate, profile: 0, level: 0);
+            if (hr >= 0) return;
+
+            hr = TrySetOutputType(bitrate, profile: MFConstants.eAVEncH264VProfile_Main, level: 0);
+            if (hr >= 0) return;
+
+            hr = TrySetOutputType(bitrate, profile: MFConstants.eAVEncH264VProfile_Base, level: 42);
+            if (hr >= 0) return;
+
+            hr = TrySetOutputType(bitrate / 2, profile: 0, level: 0);
+            if (hr >= 0) return;
+
+            MFHelpers.Check(hr, "SetOutputType(H264) [all fallbacks]");
+        }
+
+        private int TrySetOutputType(int bitrate, int profile, int level)
+        {
             var outputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_H264, _width, _height, _fps, 1);
             try
             {
                 var bitrateKey = MFGuids.MF_MT_AVG_BITRATE;
-                MFHelpers.Check(outputType.SetUINT32(ref bitrateKey, (uint)bitrate), "SetUINT32(AVG_BITRATE)");
+                int hr = outputType.SetUINT32(ref bitrateKey, (uint)bitrate);
+                if (hr < 0) return hr;
 
-                var profileKey = MFGuids.MF_MT_MPEG2_PROFILE;
-                MFHelpers.Check(outputType.SetUINT32(ref profileKey, (uint)MFConstants.eAVEncH264VProfile_Base), "SetUINT32(MPEG2_PROFILE)");
+                if (profile != 0)
+                {
+                    var profileKey = MFGuids.MF_MT_MPEG2_PROFILE;
+                    hr = outputType.SetUINT32(ref profileKey, (uint)profile);
+                    if (hr < 0) return hr;
+                }
 
-                MFHelpers.Check(_encoder.SetOutputType(0, outputType, 0), "SetOutputType(H264)");
+                if (level != 0)
+                {
+                    var levelKey = MFGuids.MF_MT_MPEG2_LEVEL;
+                    hr = outputType.SetUINT32(ref levelKey, (uint)level);
+                    if (hr < 0) return hr;
+                }
+
+                return _encoder.SetOutputType(0, outputType, 0);
             }
             finally
             {
                 Marshal.ReleaseComObject(outputType);
-            }
-
-            var inputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_NV12, _width, _height, _fps, 1);
-            try
-            {
-                MFHelpers.Check(_encoder.SetInputType(0, inputType, 0), "SetInputType(NV12)");
-            }
-            finally
-            {
-                Marshal.ReleaseComObject(inputType);
             }
         }
 
