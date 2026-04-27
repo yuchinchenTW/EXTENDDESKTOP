@@ -23,6 +23,8 @@ $refs = @(
 $shared = @(
     (Join-Path $root "Shared\Protocol.cs")
     (Join-Path $root "Shared\DiscoveryProtocol.cs")
+    (Join-Path $root "Shared\MFInterop.cs")
+    (Join-Path $root "Shared\PixelConvert.cs")
 )
 
 $hostSources = @(
@@ -30,6 +32,7 @@ $hostSources = @(
     (Join-Path $root "Host\HostForm.cs")
     (Join-Path $root "Host\DisplayHostServer.cs")
     (Join-Path $root "Host\ScreenCaptureStreamer.cs")
+    (Join-Path $root "Host\H264Encoder.cs")
     (Join-Path $root "Host\HostDiscoveryBroadcaster.cs")
 ) + $shared
 
@@ -37,18 +40,19 @@ $receiverSources = @(
     (Join-Path $root "Receiver\Program.cs")
     (Join-Path $root "Receiver\ReceiverForm.cs")
     (Join-Path $root "Receiver\DisplayReceiverClient.cs")
+    (Join-Path $root "Receiver\H264Decoder.cs")
     (Join-Path $root "Receiver\HostDiscoveryListener.cs")
 ) + $shared
 
 $hostOut = "/out:" + (Join-Path $outDir "ExtentDesktopHost.exe")
 $receiverOut = "/out:" + (Join-Path $outDir "ExtentDesktopReceiver.exe")
 
-& $compiler /nologo /target:winexe $hostOut $refs $hostSources
+& $compiler /nologo /unsafe /target:winexe $hostOut $refs $hostSources
 if ($LASTEXITCODE -ne 0) {
     throw "Host build failed."
 }
 
-& $compiler /nologo /target:winexe $receiverOut $refs $receiverSources
+& $compiler /nologo /unsafe /target:winexe $receiverOut $refs $receiverSources
 if ($LASTEXITCODE -ne 0) {
     throw "Receiver build failed."
 }

@@ -17,6 +17,7 @@ namespace ExtentDesktop.Receiver
         private TcpClient _client;
         private Thread _receiveThread;
         private Thread _decodeThread;
+        private H264Decoder _decoder;
         private volatile bool _running;
 
         public DisplayReceiverClient(Action<string> statusCallback, Action<Bitmap, int, int> frameCallback)
@@ -102,6 +103,12 @@ namespace ExtentDesktop.Receiver
                 _decodeThread = null;
             }
 
+            if (_decoder != null)
+            {
+                try { _decoder.Dispose(); } catch { }
+                _decoder = null;
+            }
+
             if (wasRunning)
             {
                 _statusCallback("Disconnected.");
@@ -157,10 +164,28 @@ namespace ExtentDesktop.Receiver
 
                 try
                 {
-                    var imageStream = new MemoryStream(frame.JpegBytes, false);
-                    var image = new Bitmap(imageStream);
-                    image.Tag = imageStream;
-                    _frameCallback(image, frame.Width, frame.Height);
+                    if (_decoder == null)
+                    {
+                        try
+                        {
+                            _decoder = new H264Decoder(frame.Width, frame.Height);
+                        }
+                        catch (Exception ex)
+                        {
+                            _statusCallback("H.264 init failed: " + ex.Message);
+                            return;
+                        }
+                    }
+
+                    _decoder.Submit(frame.JpegBytes, frame.JpegBytes.Length);
+                    Bitmap decoded;
+                    while (_decoder.TryDrainBitmap(out decoded))
+                    {
+                        if (decoded != null)
+                        {
+                            _frameCallback(decoded, frame.Width, frame.Height);
+                        }
+                    }
                 }
                 catch
                 {
@@ -178,9 +203,10 @@ namespace ExtentDesktop.Receiver
         private sealed class LatestFrameStore
         {
             private readonly object _sync = new object();
+            private readonly System.Collections.Generic.Queue<FrameData> _queue = new System.Collections.Generic.Queue<FrameData>();
             private readonly AutoResetEvent _available = new AutoResetEvent(false);
+            private const int MaxDepth = 8;
             private volatile bool _completed;
-            private FrameData _pending;
 
             public void Update(int width, int height, byte[] jpegBytes)
             {
@@ -191,12 +217,16 @@ namespace ExtentDesktop.Receiver
 
                 lock (_sync)
                 {
-                    _pending = new FrameData
+                    if (_queue.Count >= MaxDepth)
+                    {
+                        _queue.Clear();
+                    }
+                    _queue.Enqueue(new FrameData
                     {
                         Width = width,
                         Height = height,
                         JpegBytes = jpegBytes
-                    };
+                    });
                 }
 
                 _available.Set();
@@ -210,10 +240,9 @@ namespace ExtentDesktop.Receiver
                 {
                     lock (_sync)
                     {
-                        if (_pending != null)
+                        if (_queue.Count > 0)
                         {
-                            frame = _pending;
-                            _pending = null;
+                            frame = _queue.Dequeue();
                             return true;
                         }
 

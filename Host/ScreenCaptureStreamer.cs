@@ -1,9 +1,7 @@
 using System;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
-using System.Linq;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -14,34 +12,59 @@ namespace ExtentDesktop.Host
 {
     internal static class ScreenCaptureStreamer
     {
-        private static readonly ImageCodecInfo JpegCodec = ImageCodecInfo.GetImageEncoders().FirstOrDefault(codec => codec.FormatID == ImageFormat.Jpeg.Guid);
-
         public static void StreamFrames(NetworkStream stream, object writeSync, CancellationToken token, int fps, Func<Rectangle> captureBoundsProvider)
         {
-            var pipe = new EncodedFramePipe();
-            var senderThread = new Thread(delegate()
-            {
-                SenderLoop(pipe, stream, writeSync, token);
-            });
-            senderThread.IsBackground = true;
-            senderThread.Name = "FrameSender";
+            var bounds = ResolveStartBounds(captureBoundsProvider);
+            var encodedWidth = bounds.Width & ~1;
+            var encodedHeight = bounds.Height & ~1;
 
-            try
-            {
-                senderThread.Start();
+            var bitrate = ChooseBitrate(encodedWidth, encodedHeight, fps);
 
-                using (var capturer = new GdiCaptureSession(1920, 82L, captureBoundsProvider))
+            using (var encoder = new H264Encoder(encodedWidth, encodedHeight, fps, bitrate))
+            using (var capturer = new GdiCaptureSession(captureBoundsProvider, encodedWidth, encodedHeight))
+            {
+                var pipe = new EncodedFramePipe();
+                var senderThread = new Thread(delegate()
                 {
+                    SenderLoop(pipe, stream, writeSync, encodedWidth, encodedHeight, token);
+                });
+                senderThread.IsBackground = true;
+                senderThread.Name = "FrameSender";
+
+                try
+                {
+                    senderThread.Start();
+
                     var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
                     var watch = System.Diagnostics.Stopwatch.StartNew();
                     var nextFrameTicks = watch.ElapsedTicks;
 
                     while (!token.IsCancellationRequested)
                     {
-                        EncodedFrame encoded;
-                        if (capturer.TryCapture(out encoded))
+                        BitmapData locked;
+                        if (capturer.TryCaptureLocked(out locked))
                         {
-                            pipe.Submit(encoded);
+                            try
+                            {
+                                encoder.Submit(locked.Scan0, locked.Stride);
+                            }
+                            finally
+                            {
+                                capturer.UnlockCaptured();
+                            }
+
+                            byte[] outputBytes;
+                            int outputLen;
+                            bool isKeyframe;
+                            while (encoder.TryDrainOutput(out outputBytes, out outputLen, out isKeyframe))
+                            {
+                                pipe.Submit(new EncodedFrame
+                                {
+                                    Buffer = outputBytes,
+                                    Length = outputLen,
+                                    IsKeyframe = isKeyframe
+                                });
+                            }
                         }
 
                         nextFrameTicks += targetFrameTicks;
@@ -60,21 +83,41 @@ namespace ExtentDesktop.Host
                         }
                     }
                 }
-            }
-            finally
-            {
-                pipe.Complete();
-                try
+                finally
                 {
-                    senderThread.Join(1000);
-                }
-                catch
-                {
+                    pipe.Complete();
+                    try
+                    {
+                        senderThread.Join(1000);
+                    }
+                    catch
+                    {
+                    }
                 }
             }
         }
 
-        private static void SenderLoop(EncodedFramePipe pipe, NetworkStream stream, object writeSync, CancellationToken token)
+        private static Rectangle ResolveStartBounds(Func<Rectangle> provider)
+        {
+            var bounds = provider != null ? provider() : SystemInformation.VirtualScreen;
+            if (bounds.Width <= 0 || bounds.Height <= 0)
+            {
+                bounds = SystemInformation.VirtualScreen;
+            }
+            return bounds;
+        }
+
+        private static int ChooseBitrate(int width, int height, int fps)
+        {
+            long pixelsPerSecond = (long)width * height * fps;
+            double bppFactor = 0.10;
+            int bitrate = (int)(pixelsPerSecond * bppFactor);
+            if (bitrate < 1500000) bitrate = 1500000;
+            if (bitrate > 25000000) bitrate = 25000000;
+            return bitrate;
+        }
+
+        private static void SenderLoop(EncodedFramePipe pipe, NetworkStream stream, object writeSync, int width, int height, CancellationToken token)
         {
             while (!token.IsCancellationRequested)
             {
@@ -89,8 +132,8 @@ namespace ExtentDesktop.Host
                     var localFrame = frame;
                     Protocol.SendMessage(stream, writeSync, MessageType.Frame, delegate(BinaryWriter writer)
                     {
-                        writer.Write(localFrame.Width);
-                        writer.Write(localFrame.Height);
+                        writer.Write(width);
+                        writer.Write(height);
                         writer.Write(localFrame.Length);
                         writer.Write(localFrame.Buffer, 0, localFrame.Length);
                     });
@@ -104,17 +147,17 @@ namespace ExtentDesktop.Host
 
         private sealed class EncodedFrame
         {
-            public int Width;
-            public int Height;
             public byte[] Buffer;
             public int Length;
+            public bool IsKeyframe;
         }
 
         private sealed class EncodedFramePipe
         {
             private readonly object _sync = new object();
+            private readonly System.Collections.Generic.Queue<EncodedFrame> _queue = new System.Collections.Generic.Queue<EncodedFrame>();
             private readonly AutoResetEvent _available = new AutoResetEvent(false);
-            private EncodedFrame _pending;
+            private const int MaxDepth = 6;
             private volatile bool _completed;
 
             public void Submit(EncodedFrame frame)
@@ -126,7 +169,11 @@ namespace ExtentDesktop.Host
 
                 lock (_sync)
                 {
-                    _pending = frame;
+                    if (_queue.Count >= MaxDepth)
+                    {
+                        _queue.Clear();
+                    }
+                    _queue.Enqueue(frame);
                 }
 
                 _available.Set();
@@ -140,19 +187,16 @@ namespace ExtentDesktop.Host
                 {
                     lock (_sync)
                     {
-                        if (_pending != null)
+                        if (_queue.Count > 0)
                         {
-                            frame = _pending;
-                            _pending = null;
+                            frame = _queue.Dequeue();
                             return true;
                         }
-
                         if (_completed)
                         {
                             return false;
                         }
                     }
-
                     _available.WaitOne();
                 }
             }
@@ -166,152 +210,69 @@ namespace ExtentDesktop.Host
 
         private sealed class GdiCaptureSession : IDisposable
         {
-            private readonly int _maxDimension;
-            private readonly EncoderParameters _encoderParameters;
             private readonly Func<Rectangle> _captureBoundsProvider;
+            private readonly int _captureWidth;
+            private readonly int _captureHeight;
 
-            private Rectangle _sourceBounds;
             private Bitmap _captureBitmap;
             private Graphics _captureGraphics;
-            private Bitmap _scaledBitmap;
-            private Graphics _scaledGraphics;
-            private MemoryStream _jpegStream;
+            private BitmapData _lockedData;
 
-            public GdiCaptureSession(int maxDimension, long jpegQuality, Func<Rectangle> captureBoundsProvider)
+            public GdiCaptureSession(Func<Rectangle> captureBoundsProvider, int width, int height)
             {
-                _maxDimension = maxDimension;
                 _captureBoundsProvider = captureBoundsProvider;
-                _encoderParameters = new EncoderParameters(1);
-                _encoderParameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, jpegQuality);
+                _captureWidth = width;
+                _captureHeight = height;
+
+                _captureBitmap = new Bitmap(_captureWidth, _captureHeight, PixelFormat.Format32bppPArgb);
+                _captureGraphics = Graphics.FromImage(_captureBitmap);
             }
 
-            public bool TryCapture(out EncodedFrame frame)
+            public bool TryCaptureLocked(out BitmapData data)
             {
+                data = null;
                 var bounds = _captureBoundsProvider != null ? _captureBoundsProvider() : SystemInformation.VirtualScreen;
                 if (bounds.Width <= 0 || bounds.Height <= 0)
                 {
                     bounds = SystemInformation.VirtualScreen;
                 }
 
-                EnsureBuffers(bounds);
                 CaptureDesktop(bounds);
 
-                var imageToEncode = _scaledBitmap ?? _captureBitmap;
-                _jpegStream.SetLength(0);
+                _lockedData = _captureBitmap.LockBits(
+                    new Rectangle(0, 0, _captureWidth, _captureHeight),
+                    ImageLockMode.ReadOnly,
+                    PixelFormat.Format32bppPArgb);
 
-                if (JpegCodec != null)
-                {
-                    imageToEncode.Save(_jpegStream, JpegCodec, _encoderParameters);
-                }
-                else
-                {
-                    imageToEncode.Save(_jpegStream, ImageFormat.Jpeg);
-                }
-
-                var length = (int)_jpegStream.Length;
-                var snapshot = new byte[length];
-                Buffer.BlockCopy(_jpegStream.GetBuffer(), 0, snapshot, 0, length);
-
-                frame = new EncodedFrame
-                {
-                    Width = bounds.Width,
-                    Height = bounds.Height,
-                    Buffer = snapshot,
-                    Length = length
-                };
+                data = _lockedData;
                 return true;
+            }
+
+            public void UnlockCaptured()
+            {
+                if (_lockedData != null)
+                {
+                    _captureBitmap.UnlockBits(_lockedData);
+                    _lockedData = null;
+                }
             }
 
             public void Dispose()
             {
-                _encoderParameters.Dispose();
-
-                if (_scaledGraphics != null)
+                if (_lockedData != null)
                 {
-                    _scaledGraphics.Dispose();
+                    try { _captureBitmap.UnlockBits(_lockedData); } catch { }
+                    _lockedData = null;
                 }
-
-                if (_scaledBitmap != null)
-                {
-                    _scaledBitmap.Dispose();
-                }
-
-                if (_captureGraphics != null)
-                {
-                    _captureGraphics.Dispose();
-                }
-
-                if (_captureBitmap != null)
-                {
-                    _captureBitmap.Dispose();
-                }
-
-                if (_jpegStream != null)
-                {
-                    _jpegStream.Dispose();
-                }
-            }
-
-            private void EnsureBuffers(Rectangle bounds)
-            {
-                if (_captureBitmap != null && bounds == _sourceBounds)
-                {
-                    return;
-                }
-
-                DisposeBuffers();
-                _sourceBounds = bounds;
-
-                _captureBitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppPArgb);
-                _captureGraphics = Graphics.FromImage(_captureBitmap);
-
-                var scale = Math.Min(1.0, Math.Min((double)_maxDimension / bounds.Width, (double)_maxDimension / bounds.Height));
-                if (scale < 0.999)
-                {
-                    var scaledWidth = Math.Max(1, (int)Math.Round(bounds.Width * scale));
-                    var scaledHeight = Math.Max(1, (int)Math.Round(bounds.Height * scale));
-                    _scaledBitmap = new Bitmap(scaledWidth, scaledHeight, PixelFormat.Format24bppRgb);
-                    _scaledGraphics = Graphics.FromImage(_scaledBitmap);
-                    _scaledGraphics.CompositingMode = CompositingMode.SourceCopy;
-                    _scaledGraphics.CompositingQuality = CompositingQuality.HighQuality;
-                    _scaledGraphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    _scaledGraphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                    _scaledGraphics.SmoothingMode = SmoothingMode.None;
-                }
-
-                _jpegStream = new MemoryStream(Math.Max(1024, bounds.Width * bounds.Height / 4));
-            }
-
-            private void DisposeBuffers()
-            {
-                if (_scaledGraphics != null)
-                {
-                    _scaledGraphics.Dispose();
-                    _scaledGraphics = null;
-                }
-
-                if (_scaledBitmap != null)
-                {
-                    _scaledBitmap.Dispose();
-                    _scaledBitmap = null;
-                }
-
                 if (_captureGraphics != null)
                 {
                     _captureGraphics.Dispose();
                     _captureGraphics = null;
                 }
-
                 if (_captureBitmap != null)
                 {
                     _captureBitmap.Dispose();
                     _captureBitmap = null;
-                }
-
-                if (_jpegStream != null)
-                {
-                    _jpegStream.Dispose();
-                    _jpegStream = null;
                 }
             }
 
@@ -328,7 +289,7 @@ namespace ExtentDesktop.Host
                 try
                 {
                     targetDc = _captureGraphics.GetHdc();
-                    if (!BitBlt(targetDc, 0, 0, bounds.Width, bounds.Height, screenDc, bounds.Left, bounds.Top, CopyPixelOperation.SourceCopy | CopyPixelOperation.CaptureBlt))
+                    if (!BitBlt(targetDc, 0, 0, _captureWidth, _captureHeight, screenDc, bounds.Left, bounds.Top, CopyPixelOperation.SourceCopy | CopyPixelOperation.CaptureBlt))
                     {
                         throw new InvalidOperationException("BitBlt screen capture failed.");
                     }
@@ -343,11 +304,6 @@ namespace ExtentDesktop.Host
                     }
 
                     ReleaseDC(IntPtr.Zero, screenDc);
-                }
-
-                if (_scaledGraphics != null)
-                {
-                    _scaledGraphics.DrawImage(_captureBitmap, new Rectangle(Point.Empty, _scaledBitmap.Size));
                 }
             }
 
