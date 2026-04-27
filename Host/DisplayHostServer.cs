@@ -104,13 +104,17 @@ namespace ExtentDesktop.Host
                     return;
                 }
 
+                bool sessionFailed = false;
                 try
                 {
                     HandleClient(client);
                 }
                 catch (Exception ex)
                 {
-                    _statusCallback("Session ended: " + ex.Message);
+                    sessionFailed = true;
+                    var msg = "Session ended: " + ex.GetType().Name + ": " + ex.Message;
+                    _statusCallback(msg);
+                    LogError(ex);
                 }
                 finally
                 {
@@ -133,7 +137,7 @@ namespace ExtentDesktop.Host
 
                     _clientCallback("No receiver connected.");
 
-                    if (_running)
+                    if (_running && !sessionFailed)
                     {
                         _statusCallback("Listening on port " + _port + " for " + GetCaptureLabel() + ".");
                     }
@@ -183,6 +187,29 @@ namespace ExtentDesktop.Host
         private string GetCaptureLabel()
         {
             return _captureLabelProvider != null ? _captureLabelProvider() : "selected display";
+        }
+
+        private static void LogError(Exception ex)
+        {
+            try
+            {
+                var dir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                var path = System.IO.Path.Combine(dir, "extentdesktop-error.log");
+                var sb = new System.Text.StringBuilder();
+                sb.Append('[').Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")).Append("] ");
+                sb.AppendLine(ex.GetType().FullName + ": " + ex.Message);
+                sb.AppendLine(ex.StackTrace ?? "");
+                if (ex.InnerException != null)
+                {
+                    sb.AppendLine("  Inner: " + ex.InnerException.GetType().FullName + ": " + ex.InnerException.Message);
+                    sb.AppendLine(ex.InnerException.StackTrace ?? "");
+                }
+                sb.AppendLine();
+                System.IO.File.AppendAllText(path, sb.ToString());
+            }
+            catch
+            {
+            }
         }
     }
 }
