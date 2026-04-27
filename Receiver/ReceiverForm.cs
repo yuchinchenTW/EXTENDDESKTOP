@@ -26,6 +26,11 @@ namespace ExtentDesktop.Receiver
         private DisplayReceiverClient _client;
         private HostDiscoveryListener _discoveryListener;
         private Bitmap _currentFrame;
+        private Bitmap _pendingFrame;
+        private int _pendingWidth;
+        private int _pendingHeight;
+        private bool _paintScheduled;
+        private readonly object _frameSync = new object();
         private Rectangle _normalBounds;
         private FormBorderStyle _normalBorderStyle;
         private bool _isFullscreen;
@@ -219,8 +224,20 @@ namespace ExtentDesktop.Receiver
 
             if (_currentFrame != null)
             {
-                _currentFrame.Dispose();
+                DisposeFrame(_currentFrame);
                 _currentFrame = null;
+            }
+
+            Bitmap leftover;
+            lock (_frameSync)
+            {
+                leftover = _pendingFrame;
+                _pendingFrame = null;
+            }
+
+            if (leftover != null)
+            {
+                DisposeFrame(leftover);
             }
         }
 
@@ -348,13 +365,63 @@ namespace ExtentDesktop.Receiver
         {
             if (IsDisposed)
             {
-                frame.Dispose();
+                DisposeFrame(frame);
                 return;
             }
 
-            if (InvokeRequired)
+            Bitmap droppedFrame = null;
+            bool needSchedule = false;
+
+            lock (_frameSync)
             {
-                BeginInvoke(new Action<Bitmap, int, int>(UpdateFrame), frame, width, height);
+                if (_pendingFrame != null)
+                {
+                    droppedFrame = _pendingFrame;
+                }
+
+                _pendingFrame = frame;
+                _pendingWidth = width;
+                _pendingHeight = height;
+
+                if (!_paintScheduled)
+                {
+                    _paintScheduled = true;
+                    needSchedule = true;
+                }
+            }
+
+            if (droppedFrame != null)
+            {
+                DisposeFrame(droppedFrame);
+            }
+
+            if (needSchedule)
+            {
+                BeginInvoke(new Action(ApplyPendingFrame));
+            }
+        }
+
+        private void ApplyPendingFrame()
+        {
+            Bitmap frame;
+            int width;
+            int height;
+
+            lock (_frameSync)
+            {
+                frame = _pendingFrame;
+                width = _pendingWidth;
+                height = _pendingHeight;
+                _pendingFrame = null;
+                _paintScheduled = false;
+            }
+
+            if (frame == null || IsDisposed)
+            {
+                if (frame != null)
+                {
+                    DisposeFrame(frame);
+                }
                 return;
             }
 
@@ -365,7 +432,22 @@ namespace ExtentDesktop.Receiver
 
             if (previous != null)
             {
-                previous.Dispose();
+                DisposeFrame(previous);
+            }
+        }
+
+        private static void DisposeFrame(Bitmap frame)
+        {
+            if (frame == null)
+            {
+                return;
+            }
+
+            var stream = frame.Tag as IDisposable;
+            frame.Dispose();
+            if (stream != null)
+            {
+                stream.Dispose();
             }
         }
 
@@ -460,12 +542,19 @@ namespace ExtentDesktop.Receiver
 
         private sealed class HqPictureBox : PictureBox
         {
+            public HqPictureBox()
+            {
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+            }
+
             protected override void OnPaint(PaintEventArgs pe)
             {
-                pe.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                pe.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                pe.Graphics.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                pe.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
                 pe.Graphics.SmoothingMode = SmoothingMode.None;
-                pe.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+                pe.Graphics.CompositingQuality = CompositingQuality.AssumeLinear;
+                pe.Graphics.CompositingMode = CompositingMode.SourceCopy;
                 base.OnPaint(pe);
             }
         }

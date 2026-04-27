@@ -157,11 +157,10 @@ namespace ExtentDesktop.Receiver
 
                 try
                 {
-                    using (var imageStream = new MemoryStream(frame.JpegBytes))
-                    using (var image = Image.FromStream(imageStream))
-                    {
-                        _frameCallback(new Bitmap(image), frame.Width, frame.Height);
-                    }
+                    var imageStream = new MemoryStream(frame.JpegBytes, false);
+                    var image = new Bitmap(imageStream);
+                    image.Tag = imageStream;
+                    _frameCallback(image, frame.Width, frame.Height);
                 }
                 catch
                 {

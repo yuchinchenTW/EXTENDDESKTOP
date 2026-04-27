@@ -176,7 +176,7 @@ namespace ExtentDesktop.Host
 
                 _statusCallback("Streaming " + GetCaptureLabel() + " to " + client.Client.RemoteEndPoint + ".");
                 _sessionTokenSource = new CancellationTokenSource();
-                ScreenCaptureStreamer.StreamFrames(stream, writeSync, _sessionTokenSource.Token, 30, _captureBoundsProvider);
+                ScreenCaptureStreamer.StreamFrames(stream, writeSync, _sessionTokenSource.Token, 60, _captureBoundsProvider);
             }
         }
 

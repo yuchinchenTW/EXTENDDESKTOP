@@ -18,49 +18,150 @@ namespace ExtentDesktop.Host
 
         public static void StreamFrames(NetworkStream stream, object writeSync, CancellationToken token, int fps, Func<Rectangle> captureBoundsProvider)
         {
-            using (var capturer = new GdiCaptureSession(1920, 85L, captureBoundsProvider))
+            var pipe = new EncodedFramePipe();
+            var senderThread = new Thread(delegate()
             {
-                var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
-                var watch = System.Diagnostics.Stopwatch.StartNew();
-                var nextFrameTicks = watch.ElapsedTicks;
+                SenderLoop(pipe, stream, writeSync, token);
+            });
+            senderThread.IsBackground = true;
+            senderThread.Name = "FrameSender";
 
-                while (!token.IsCancellationRequested)
+            try
+            {
+                senderThread.Start();
+
+                using (var capturer = new GdiCaptureSession(1920, 82L, captureBoundsProvider))
                 {
-                    CapturedFrame frame;
-                    if (capturer.TryCapture(out frame))
-                    {
-                        Protocol.SendMessage(stream, writeSync, MessageType.Frame, delegate(BinaryWriter writer)
-                        {
-                            writer.Write(frame.SourceWidth);
-                            writer.Write(frame.SourceHeight);
-                            writer.Write(frame.JpegBytes.Length);
-                            writer.Write(frame.JpegBytes);
-                        });
-                    }
+                    var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
+                    var watch = System.Diagnostics.Stopwatch.StartNew();
+                    var nextFrameTicks = watch.ElapsedTicks;
 
-                    nextFrameTicks += targetFrameTicks;
-                    var remainingTicks = nextFrameTicks - watch.ElapsedTicks;
-                    if (remainingTicks > 0)
+                    while (!token.IsCancellationRequested)
                     {
-                        var remainingMs = (int)(remainingTicks * 1000L / System.Diagnostics.Stopwatch.Frequency);
-                        if (remainingMs > 0 && token.WaitHandle.WaitOne(remainingMs))
+                        EncodedFrame encoded;
+                        if (capturer.TryCapture(out encoded))
                         {
-                            return;
+                            pipe.Submit(encoded);
+                        }
+
+                        nextFrameTicks += targetFrameTicks;
+                        var remainingTicks = nextFrameTicks - watch.ElapsedTicks;
+                        if (remainingTicks > 0)
+                        {
+                            var remainingMs = (int)(remainingTicks * 1000L / System.Diagnostics.Stopwatch.Frequency);
+                            if (remainingMs > 0 && token.WaitHandle.WaitOne(remainingMs))
+                            {
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            nextFrameTicks = watch.ElapsedTicks;
                         }
                     }
-                    else
-                    {
-                        nextFrameTicks = watch.ElapsedTicks;
-                    }
+                }
+            }
+            finally
+            {
+                pipe.Complete();
+                try
+                {
+                    senderThread.Join(1000);
+                }
+                catch
+                {
                 }
             }
         }
 
-        private sealed class CapturedFrame
+        private static void SenderLoop(EncodedFramePipe pipe, NetworkStream stream, object writeSync, CancellationToken token)
         {
-            public int SourceWidth;
-            public int SourceHeight;
-            public byte[] JpegBytes;
+            while (!token.IsCancellationRequested)
+            {
+                EncodedFrame frame;
+                if (!pipe.TakeNext(out frame))
+                {
+                    return;
+                }
+
+                try
+                {
+                    var localFrame = frame;
+                    Protocol.SendMessage(stream, writeSync, MessageType.Frame, delegate(BinaryWriter writer)
+                    {
+                        writer.Write(localFrame.Width);
+                        writer.Write(localFrame.Height);
+                        writer.Write(localFrame.Length);
+                        writer.Write(localFrame.Buffer, 0, localFrame.Length);
+                    });
+                }
+                catch
+                {
+                    return;
+                }
+            }
+        }
+
+        private sealed class EncodedFrame
+        {
+            public int Width;
+            public int Height;
+            public byte[] Buffer;
+            public int Length;
+        }
+
+        private sealed class EncodedFramePipe
+        {
+            private readonly object _sync = new object();
+            private readonly AutoResetEvent _available = new AutoResetEvent(false);
+            private EncodedFrame _pending;
+            private volatile bool _completed;
+
+            public void Submit(EncodedFrame frame)
+            {
+                if (_completed)
+                {
+                    return;
+                }
+
+                lock (_sync)
+                {
+                    _pending = frame;
+                }
+
+                _available.Set();
+            }
+
+            public bool TakeNext(out EncodedFrame frame)
+            {
+                frame = null;
+
+                while (true)
+                {
+                    lock (_sync)
+                    {
+                        if (_pending != null)
+                        {
+                            frame = _pending;
+                            _pending = null;
+                            return true;
+                        }
+
+                        if (_completed)
+                        {
+                            return false;
+                        }
+                    }
+
+                    _available.WaitOne();
+                }
+            }
+
+            public void Complete()
+            {
+                _completed = true;
+                _available.Set();
+            }
         }
 
         private sealed class GdiCaptureSession : IDisposable
@@ -84,7 +185,7 @@ namespace ExtentDesktop.Host
                 _encoderParameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, jpegQuality);
             }
 
-            public bool TryCapture(out CapturedFrame frame)
+            public bool TryCapture(out EncodedFrame frame)
             {
                 var bounds = _captureBoundsProvider != null ? _captureBoundsProvider() : SystemInformation.VirtualScreen;
                 if (bounds.Width <= 0 || bounds.Height <= 0)
@@ -107,11 +208,16 @@ namespace ExtentDesktop.Host
                     imageToEncode.Save(_jpegStream, ImageFormat.Jpeg);
                 }
 
-                frame = new CapturedFrame
+                var length = (int)_jpegStream.Length;
+                var snapshot = new byte[length];
+                Buffer.BlockCopy(_jpegStream.GetBuffer(), 0, snapshot, 0, length);
+
+                frame = new EncodedFrame
                 {
-                    SourceWidth = bounds.Width,
-                    SourceHeight = bounds.Height,
-                    JpegBytes = _jpegStream.ToArray()
+                    Width = bounds.Width,
+                    Height = bounds.Height,
+                    Buffer = snapshot,
+                    Length = length
                 };
                 return true;
             }
