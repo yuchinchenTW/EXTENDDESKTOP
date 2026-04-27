@@ -282,14 +282,14 @@ namespace ExtentDesktop.Shared
     {
         [PreserveSig] int GetStreamLimits(out int pdwInputMinimum, out int pdwInputMaximum, out int pdwOutputMinimum, out int pdwOutputMaximum);
         [PreserveSig] int GetStreamCount(out int pcInputStreams, out int pcOutputStreams);
-        [PreserveSig] int GetStreamIDs(int dwInputIDArraySize, [Out] int[] pdwInputIDs, int dwOutputIDArraySize, [Out] int[] pdwOutputIDs);
+        [PreserveSig] int GetStreamIDs(int dwInputIDArraySize, [Out, MarshalAs(UnmanagedType.LPArray)] int[] pdwInputIDs, int dwOutputIDArraySize, [Out, MarshalAs(UnmanagedType.LPArray)] int[] pdwOutputIDs);
         [PreserveSig] int GetInputStreamInfo(int dwInputStreamID, out MFT_INPUT_STREAM_INFO pStreamInfo);
         [PreserveSig] int GetOutputStreamInfo(int dwOutputStreamID, out MFT_OUTPUT_STREAM_INFO pStreamInfo);
         [PreserveSig] int GetAttributes(out IMFAttributes pAttributes);
         [PreserveSig] int GetInputStreamAttributes(int dwInputStreamID, out IMFAttributes pAttributes);
         [PreserveSig] int GetOutputStreamAttributes(int dwOutputStreamID, out IMFAttributes pAttributes);
         [PreserveSig] int DeleteInputStream(int dwStreamID);
-        [PreserveSig] int AddInputStreams(int cStreams, [In] int[] adwStreamIDs);
+        [PreserveSig] int AddInputStreams(int cStreams, [In, MarshalAs(UnmanagedType.LPArray)] int[] adwStreamIDs);
         [PreserveSig] int GetInputAvailableType(int dwInputStreamID, int dwTypeIndex, out IMFMediaType ppType);
         [PreserveSig] int GetOutputAvailableType(int dwOutputStreamID, int dwTypeIndex, out IMFMediaType ppType);
         [PreserveSig] int SetInputType(int dwInputStreamID, IMFMediaType pType, int dwFlags);
@@ -302,7 +302,7 @@ namespace ExtentDesktop.Shared
         [PreserveSig] int ProcessEvent(int dwInputStreamID, IntPtr pEvent);
         [PreserveSig] int ProcessMessage(int eMessage, IntPtr ulParam);
         [PreserveSig] int ProcessInput(int dwInputStreamID, IMFSample pSample, int dwFlags);
-        [PreserveSig] int ProcessOutput(int dwFlags, int cOutputBufferCount, [In, Out] MFT_OUTPUT_DATA_BUFFER[] pOutputSamples, out uint pdwStatus);
+        [PreserveSig] int ProcessOutput(int dwFlags, int cOutputBufferCount, [In, Out, MarshalAs(UnmanagedType.LPArray)] MFT_OUTPUT_DATA_BUFFER[] pOutputSamples, out uint pdwStatus);
     }
 
     [ComImport, Guid("901db4c7-31ce-41a2-85dc-8fa0bf41b8da"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
