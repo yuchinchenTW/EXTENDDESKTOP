@@ -157,26 +157,25 @@ namespace ExtentDesktop.Host
             private readonly object _sync = new object();
             private readonly System.Collections.Generic.Queue<EncodedFrame> _queue = new System.Collections.Generic.Queue<EncodedFrame>();
             private readonly AutoResetEvent _available = new AutoResetEvent(false);
-            private const int MaxDepth = 6;
+            private readonly AutoResetEvent _slotFreed = new AutoResetEvent(false);
+            private const int MaxDepth = 2;
             private volatile bool _completed;
 
             public void Submit(EncodedFrame frame)
             {
-                if (_completed)
+                while (!_completed)
                 {
-                    return;
-                }
-
-                lock (_sync)
-                {
-                    if (_queue.Count >= MaxDepth)
+                    lock (_sync)
                     {
-                        _queue.Clear();
+                        if (_queue.Count < MaxDepth)
+                        {
+                            _queue.Enqueue(frame);
+                            _available.Set();
+                            return;
+                        }
                     }
-                    _queue.Enqueue(frame);
+                    _slotFreed.WaitOne(50);
                 }
-
-                _available.Set();
             }
 
             public bool TakeNext(out EncodedFrame frame)
@@ -190,6 +189,7 @@ namespace ExtentDesktop.Host
                         if (_queue.Count > 0)
                         {
                             frame = _queue.Dequeue();
+                            _slotFreed.Set();
                             return true;
                         }
                         if (_completed)
@@ -205,6 +205,7 @@ namespace ExtentDesktop.Host
             {
                 _completed = true;
                 _available.Set();
+                _slotFreed.Set();
             }
         }
 

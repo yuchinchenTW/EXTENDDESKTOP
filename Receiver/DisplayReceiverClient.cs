@@ -205,31 +205,30 @@ namespace ExtentDesktop.Receiver
             private readonly object _sync = new object();
             private readonly System.Collections.Generic.Queue<FrameData> _queue = new System.Collections.Generic.Queue<FrameData>();
             private readonly AutoResetEvent _available = new AutoResetEvent(false);
-            private const int MaxDepth = 8;
+            private readonly AutoResetEvent _slotFreed = new AutoResetEvent(false);
+            private const int MaxDepth = 2;
             private volatile bool _completed;
 
             public void Update(int width, int height, byte[] jpegBytes)
             {
-                if (_completed)
+                while (!_completed)
                 {
-                    return;
-                }
-
-                lock (_sync)
-                {
-                    if (_queue.Count >= MaxDepth)
+                    lock (_sync)
                     {
-                        _queue.Clear();
+                        if (_queue.Count < MaxDepth)
+                        {
+                            _queue.Enqueue(new FrameData
+                            {
+                                Width = width,
+                                Height = height,
+                                JpegBytes = jpegBytes
+                            });
+                            _available.Set();
+                            return;
+                        }
                     }
-                    _queue.Enqueue(new FrameData
-                    {
-                        Width = width,
-                        Height = height,
-                        JpegBytes = jpegBytes
-                    });
+                    _slotFreed.WaitOne(50);
                 }
-
-                _available.Set();
             }
 
             public bool WaitAndTake(out FrameData frame)
@@ -243,6 +242,7 @@ namespace ExtentDesktop.Receiver
                         if (_queue.Count > 0)
                         {
                             frame = _queue.Dequeue();
+                            _slotFreed.Set();
                             return true;
                         }
 
@@ -260,6 +260,7 @@ namespace ExtentDesktop.Receiver
             {
                 _completed = true;
                 _available.Set();
+                _slotFreed.Set();
             }
         }
     }
