@@ -217,8 +217,8 @@ namespace ExtentDesktop.Receiver
             private readonly System.Collections.Generic.Stack<FrameData> _frameDataPool = new System.Collections.Generic.Stack<FrameData>();
             private readonly AutoResetEvent _available = new AutoResetEvent(false);
             private readonly AutoResetEvent _slotFreed = new AutoResetEvent(false);
-            private const int MaxDepth = 1;
-            private const int BufferPoolCapacity = 4;
+            private const int MaxDepth = 3;
+            private const int BufferPoolCapacity = 6;
             private volatile bool _completed;
 
             public void Update(int width, int height, byte[] source, int offset, int length)

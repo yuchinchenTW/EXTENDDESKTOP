@@ -29,9 +29,13 @@ namespace ExtentDesktop.Host
 
                 while (!token.IsCancellationRequested)
                 {
+                    long t0 = watch.ElapsedTicks;
                     BitmapData locked;
+                    long tCap = t0;
+                    long tEnc = t0;
                     if (capturer.TryCaptureLocked(out locked))
                     {
+                        tCap = watch.ElapsedTicks;
                         try
                         {
                             encoder.Submit(locked.Scan0, locked.Stride);
@@ -40,6 +44,7 @@ namespace ExtentDesktop.Host
                         {
                             capturer.UnlockCaptured();
                         }
+                        tEnc = watch.ElapsedTicks;
 
                         byte[] outputBytes;
                         int outputLen;
@@ -62,6 +67,16 @@ namespace ExtentDesktop.Host
                             {
                                 return;
                             }
+                        }
+
+                        long tSend = watch.ElapsedTicks;
+                        long totalMs = (tSend - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                        if (totalMs > 50)
+                        {
+                            long capMs = (tCap - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                            long encMs = (tEnc - tCap) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                            long sendMs = (tSend - tEnc) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                            MFHelpers.Log("SLOW frame total=" + totalMs + "ms cap=" + capMs + " enc=" + encMs + " send=" + sendMs);
                         }
                     }
 
