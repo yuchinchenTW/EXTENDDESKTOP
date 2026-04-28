@@ -39,6 +39,10 @@ namespace ExtentDesktop.Shared
 
         public static readonly Guid MFT_TRANSFORM_ASYNC = new Guid("f81a699a-649a-497d-8c73-29f8fed6ad7a");
         public static readonly Guid MFT_TRANSFORM_ASYNC_UNLOCK = new Guid("e5666d6b-3422-4eb6-a421-da7db1f8e207");
+
+        public static readonly Guid MFT_CATEGORY_VIDEO_ENCODER = new Guid("f79eac7d-e545-4387-bdee-d647d7bde42a");
+        public static readonly Guid MFT_CATEGORY_VIDEO_DECODER = new Guid("d6c02d4b-6833-45b4-971a-05a4b04bab91");
+        public static readonly Guid MFT_FRIENDLY_NAME_Attribute = new Guid("314ffbae-5b41-4c95-9c19-4e7d586face3");
     }
 
     internal static class MFConstants
@@ -97,6 +101,26 @@ namespace ExtentDesktop.Shared
         public int cbSize;
         public int cbMaxLookahead;
         public int cbAlignment;
+    }
+
+    [Flags]
+    internal enum MFT_ENUM_FLAG : uint
+    {
+        SyncMFT = 0x00000001,
+        AsyncMFT = 0x00000002,
+        Hardware = 0x00000004,
+        FieldOfUse = 0x00000008,
+        LocalMFT = 0x00000010,
+        TranscodeOnly = 0x00000020,
+        SortAndFilter = 0x00000040,
+        All = 0x0000003F
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MFT_REGISTER_TYPE_INFO
+    {
+        public Guid guidMajorType;
+        public Guid guidSubtype;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -282,6 +306,45 @@ namespace ExtentDesktop.Shared
         [PreserveSig] int CopyToBuffer(IMFMediaBuffer pBuffer);
     }
 
+    [ComImport, Guid("7FEE9E9A-4A89-47a6-899C-B6A53A70FB67"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IMFActivate : IMFAttributes
+    {
+        [PreserveSig] new int GetItem(ref Guid guidKey, IntPtr pValue);
+        [PreserveSig] new int GetItemType(ref Guid guidKey, out int pType);
+        [PreserveSig] new int CompareItem(ref Guid guidKey, IntPtr Value, out bool pbResult);
+        [PreserveSig] new int Compare(IMFAttributes pTheirs, int MatchType, out bool pbResult);
+        [PreserveSig] new int GetUINT32(ref Guid guidKey, out uint punValue);
+        [PreserveSig] new int GetUINT64(ref Guid guidKey, out ulong punValue);
+        [PreserveSig] new int GetDouble(ref Guid guidKey, out double pfValue);
+        [PreserveSig] new int GetGUID(ref Guid guidKey, out Guid pguidValue);
+        [PreserveSig] new int GetStringLength(ref Guid guidKey, out int pcchLength);
+        [PreserveSig] new int GetString(ref Guid guidKey, [MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pwszValue, int cchBufSize, out int pcchLength);
+        [PreserveSig] new int GetAllocatedString(ref Guid guidKey, [MarshalAs(UnmanagedType.LPWStr)] out string ppwszValue, out int pcchLength);
+        [PreserveSig] new int GetBlobSize(ref Guid guidKey, out int pcbBlobSize);
+        [PreserveSig] new int GetBlob(ref Guid guidKey, [Out] byte[] pBuf, int cbBufSize, out int pcbBlobSize);
+        [PreserveSig] new int GetAllocatedBlob(ref Guid guidKey, out IntPtr ppBuf, out int pcbSize);
+        [PreserveSig] new int GetUnknown(ref Guid guidKey, ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object ppv);
+        [PreserveSig] new int SetItem(ref Guid guidKey, IntPtr Value);
+        [PreserveSig] new int DeleteItem(ref Guid guidKey);
+        [PreserveSig] new int DeleteAllItems();
+        [PreserveSig] new int SetUINT32(ref Guid guidKey, uint unValue);
+        [PreserveSig] new int SetUINT64(ref Guid guidKey, ulong unValue);
+        [PreserveSig] new int SetDouble(ref Guid guidKey, double fValue);
+        [PreserveSig] new int SetGUID(ref Guid guidKey, ref Guid guidValue);
+        [PreserveSig] new int SetString(ref Guid guidKey, [MarshalAs(UnmanagedType.LPWStr)] string wszValue);
+        [PreserveSig] new int SetBlob(ref Guid guidKey, byte[] pBuf, int cbBufSize);
+        [PreserveSig] new int SetUnknown(ref Guid guidKey, [MarshalAs(UnmanagedType.IUnknown)] object pUnknown);
+        [PreserveSig] new int LockStore();
+        [PreserveSig] new int UnlockStore();
+        [PreserveSig] new int GetCount(out int pcItems);
+        [PreserveSig] new int GetItemByIndex(int unIndex, out Guid pguidKey, IntPtr pValue);
+        [PreserveSig] new int CopyAllItems(IMFAttributes pDest);
+
+        [PreserveSig] int ActivateObject(ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object ppv);
+        [PreserveSig] int ShutdownObject();
+        [PreserveSig] int DetachObject();
+    }
+
     [ComImport, Guid("bf94c121-5b05-4e6f-8000-ba598961414d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IMFTransform
     {
@@ -358,6 +421,18 @@ namespace ExtentDesktop.Shared
 
         [DllImport("ole32.dll", ExactSpelling = true)]
         public static extern void CoUninitialize();
+
+        [DllImport("mfplat.dll", ExactSpelling = true)]
+        public static extern int MFTEnumEx(
+            Guid guidCategory,
+            int Flags,
+            IntPtr pInputType,
+            IntPtr pOutputType,
+            out IntPtr pppMFTActivate,
+            out int pcMFTActivate);
+
+        [DllImport("ole32.dll", ExactSpelling = true)]
+        public static extern void CoTaskMemFree(IntPtr pv);
     }
 
     internal static class MFHelpers

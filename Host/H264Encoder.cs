@@ -231,9 +231,103 @@ namespace ExtentDesktop.Host
             _converterStreaming = false;
         }
 
+        private void EnumerateHwEncoders()
+        {
+            try
+            {
+                var outputType = new MFT_REGISTER_TYPE_INFO
+                {
+                    guidMajorType = MFGuids.MFMediaType_Video,
+                    guidSubtype = MFGuids.MFVideoFormat_H264
+                };
+
+                IntPtr outputTypePtr = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(MFT_REGISTER_TYPE_INFO)));
+                IntPtr arrayPtr;
+                int count;
+                try
+                {
+                    Marshal.StructureToPtr(outputType, outputTypePtr, false);
+                    int hr = MFNative.MFTEnumEx(
+                        MFGuids.MFT_CATEGORY_VIDEO_ENCODER,
+                        (int)(MFT_ENUM_FLAG.Hardware | MFT_ENUM_FLAG.SortAndFilter),
+                        IntPtr.Zero,
+                        outputTypePtr,
+                        out arrayPtr,
+                        out count);
+                    MFHelpers.Log("MFTEnumEx(HW H.264 encoders) hr=0x" + hr.ToString("X8") + " count=" + count);
+                    if (hr < 0 || count == 0)
+                    {
+                        if (arrayPtr != IntPtr.Zero) MFNative.CoTaskMemFree(arrayPtr);
+                        return;
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(outputTypePtr);
+                }
+
+                try
+                {
+                    for (int i = 0; i < count; i++)
+                    {
+                        IntPtr activatePtr = Marshal.ReadIntPtr(arrayPtr, i * IntPtr.Size);
+                        if (activatePtr == IntPtr.Zero) continue;
+
+                        try
+                        {
+                            object activateObj = Marshal.GetObjectForIUnknown(activatePtr);
+                            var activate = activateObj as IMFActivate;
+                            if (activate == null)
+                            {
+                                Marshal.ReleaseComObject(activateObj);
+                                continue;
+                            }
+
+                            try
+                            {
+                                var nameKey = MFGuids.MFT_FRIENDLY_NAME_Attribute;
+                                int len;
+                                if (activate.GetStringLength(ref nameKey, out len) == 0 && len > 0)
+                                {
+                                    var sb = new System.Text.StringBuilder(len + 1);
+                                    int actLen;
+                                    if (activate.GetString(ref nameKey, sb, sb.Capacity, out actLen) == 0)
+                                    {
+                                        MFHelpers.Log("  HW encoder[" + i + "]: " + sb.ToString());
+                                    }
+                                }
+                                else
+                                {
+                                    MFHelpers.Log("  HW encoder[" + i + "]: (no friendly name)");
+                                }
+                            }
+                            finally
+                            {
+                                Marshal.ReleaseComObject(activate);
+                            }
+                        }
+                        finally
+                        {
+                            Marshal.Release(activatePtr);
+                        }
+                    }
+                }
+                finally
+                {
+                    MFNative.CoTaskMemFree(arrayPtr);
+                }
+            }
+            catch (Exception ex)
+            {
+                MFHelpers.Log("EnumerateHwEncoders threw: " + ex.Message);
+            }
+        }
+
         private void CreateEncoder(int bitrate)
         {
             MFHelpers.Log("=== H264Encoder.CreateEncoder begin: " + _width + "x" + _height + "@" + _fps + " bitrate=" + bitrate + " ===");
+
+            EnumerateHwEncoders();
 
             var clsid = MFGuids.CLSID_CMSH264EncoderMFT;
             var iid = new Guid("bf94c121-5b05-4e6f-8000-ba598961414d");
