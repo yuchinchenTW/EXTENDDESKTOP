@@ -143,8 +143,35 @@ namespace ExtentDesktop.Receiver
             MFHelpers.Check(hr, "CoCreateInstance(H264 Decoder)");
             _decoder = (IMFTransform)decoderObj;
 
+            SetDecoderLowLatency();
             SetInputTypeFromAvailable();
             TryNegotiateOutputType();
+        }
+
+        private void SetDecoderLowLatency()
+        {
+            try
+            {
+                IMFAttributes attrs;
+                int hr = _decoder.GetAttributes(out attrs);
+                MFHelpers.LogHr("decoder GetAttributes", hr);
+                if (hr < 0 || attrs == null) return;
+
+                try
+                {
+                    var lowLatencyKey = MFGuids.MF_LOW_LATENCY;
+                    int setHr = attrs.SetUINT32(ref lowLatencyKey, 1);
+                    MFHelpers.LogHr("decoder SetUINT32(MF_LOW_LATENCY)", setHr);
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(attrs);
+                }
+            }
+            catch (Exception ex)
+            {
+                MFHelpers.Log("SetDecoderLowLatency threw: " + ex.Message);
+            }
         }
 
         private void SetInputTypeFromAvailable()
