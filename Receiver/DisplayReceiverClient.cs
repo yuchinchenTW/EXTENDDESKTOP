@@ -201,11 +201,13 @@ namespace ExtentDesktop.Receiver
                     long tDrain = sw.ElapsedTicks;
 
                     long totalMs = (tDrain - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                    if (totalMs > 50)
+                    if (totalMs > 35)
                     {
                         long subMs = (tSubmit - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
                         long drainMs = (tDrain - tSubmit) * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs);
+                        long procMs = _decoder.LastProcessOutputTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                        long convMs = _decoder.LastConvertTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs + " procOut=" + procMs + " convert=" + convMs);
                     }
                 }
                 catch (Exception ex)

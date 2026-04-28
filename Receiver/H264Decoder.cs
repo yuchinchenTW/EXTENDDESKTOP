@@ -100,6 +100,9 @@ namespace ExtentDesktop.Receiver
             _persistentInputCapacity = capacity;
         }
 
+        internal long LastProcessOutputTicks;
+        internal long LastConvertTicks;
+
         public bool TryDrainBitmap(out Bitmap bitmap)
         {
             return DrainOutput(out bitmap);
@@ -367,7 +370,9 @@ namespace ExtentDesktop.Receiver
                 outputs[0].pEvents = null;
 
                 uint status;
+                long tBefore = System.Diagnostics.Stopwatch.GetTimestamp();
                 int hr = _decoder.ProcessOutput(0, 1, outputs, out status);
+                LastProcessOutputTicks = System.Diagnostics.Stopwatch.GetTimestamp() - tBefore;
 
                 if (hr == MFConstants.MF_E_TRANSFORM_NEED_MORE_INPUT)
                 {
@@ -391,7 +396,9 @@ namespace ExtentDesktop.Receiver
 
                 try
                 {
+                    long tConv = System.Diagnostics.Stopwatch.GetTimestamp();
                     bitmap = ConvertSampleToBitmap(sample);
+                    LastConvertTicks = System.Diagnostics.Stopwatch.GetTimestamp() - tConv;
                 }
                 finally
                 {
