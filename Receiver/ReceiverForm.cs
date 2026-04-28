@@ -18,10 +18,12 @@ namespace ExtentDesktop.Receiver
         private readonly Button _disconnectButton;
         private readonly Button _fullscreenButton;
         private readonly ListView _hostsListView;
-        private readonly PictureBox _pictureBox;
+        private readonly HqPictureBox _pictureBox;
         private readonly Label _statusLabel;
         private readonly Label _infoLabel;
         private readonly Timer _discoveryRefreshTimer;
+        private readonly Timer _fpsTimer;
+        private int _fpsCounter;
 
         private DisplayReceiverClient _client;
         private HostDiscoveryListener _discoveryListener;
@@ -200,6 +202,11 @@ namespace ExtentDesktop.Receiver
             _discoveryRefreshTimer.Interval = 1000;
             _discoveryRefreshTimer.Tick += DiscoveryRefreshTimer_Tick;
             _discoveryRefreshTimer.Start();
+
+            _fpsTimer = new Timer();
+            _fpsTimer.Interval = 1000;
+            _fpsTimer.Tick += FpsTimer_Tick;
+            _fpsTimer.Start();
         }
 
         private void ReceiverForm_FormClosed(object sender, FormClosedEventArgs e)
@@ -208,6 +215,12 @@ namespace ExtentDesktop.Receiver
             {
                 _discoveryRefreshTimer.Stop();
                 _discoveryRefreshTimer.Dispose();
+            }
+
+            if (_fpsTimer != null)
+            {
+                _fpsTimer.Stop();
+                _fpsTimer.Dispose();
             }
 
             if (_discoveryListener != null)
@@ -244,6 +257,13 @@ namespace ExtentDesktop.Receiver
         private void DiscoveryRefreshTimer_Tick(object sender, EventArgs e)
         {
             RefreshDiscoveredHosts();
+        }
+
+        private void FpsTimer_Tick(object sender, EventArgs e)
+        {
+            var count = System.Threading.Interlocked.Exchange(ref _fpsCounter, 0);
+            _pictureBox.Fps = count;
+            _pictureBox.Invalidate();
         }
 
         private void ConnectButton_Click(object sender, EventArgs e)
@@ -429,6 +449,7 @@ namespace ExtentDesktop.Receiver
             _currentFrame = frame;
             _pictureBox.Image = _currentFrame;
             Text = "ExtentDesktop Receiver - " + width + "x" + height;
+            System.Threading.Interlocked.Increment(ref _fpsCounter);
 
             if (previous != null)
             {
@@ -440,6 +461,14 @@ namespace ExtentDesktop.Receiver
         {
             if (frame == null)
             {
+                return;
+            }
+
+            var pool = frame.Tag as FrameBitmapPool;
+            if (pool != null)
+            {
+                frame.Tag = null;
+                pool.Return(frame);
                 return;
             }
 
@@ -542,6 +571,12 @@ namespace ExtentDesktop.Receiver
 
         private sealed class HqPictureBox : PictureBox
         {
+            private static readonly Font OverlayFont = new Font("Consolas", 11, FontStyle.Bold);
+            private static readonly Brush OverlayBackBrush = new SolidBrush(Color.FromArgb(160, 0, 0, 0));
+            private static readonly Brush OverlayForeBrush = new SolidBrush(Color.FromArgb(255, 80, 255, 120));
+
+            public int Fps { get; set; }
+
             public HqPictureBox()
             {
                 DoubleBuffered = true;
@@ -556,6 +591,17 @@ namespace ExtentDesktop.Receiver
                 pe.Graphics.CompositingQuality = CompositingQuality.AssumeLinear;
                 pe.Graphics.CompositingMode = CompositingMode.SourceCopy;
                 base.OnPaint(pe);
+
+                var fps = Fps;
+                if (fps > 0)
+                {
+                    pe.Graphics.CompositingMode = CompositingMode.SourceOver;
+                    var text = fps + " fps";
+                    var size = pe.Graphics.MeasureString(text, OverlayFont);
+                    var rect = new RectangleF(Width - size.Width - 12, 8, size.Width + 8, size.Height + 4);
+                    pe.Graphics.FillRectangle(OverlayBackBrush, rect);
+                    pe.Graphics.DrawString(text, OverlayFont, OverlayForeBrush, rect.X + 4, rect.Y + 2);
+                }
             }
         }
     }

@@ -10,6 +10,7 @@ namespace ExtentDesktop.Receiver
     {
         private readonly int _expectedWidth;
         private readonly int _expectedHeight;
+        private readonly FrameBitmapPool _bitmapPool;
         private IMFTransform _decoder;
         private IMFMediaBuffer _outputBuffer;
         private IMFSample _outputSample;
@@ -20,10 +21,11 @@ namespace ExtentDesktop.Receiver
         private int _frameStride;
         private bool _streaming;
 
-        public H264Decoder(int expectedWidth, int expectedHeight)
+        public H264Decoder(int expectedWidth, int expectedHeight, FrameBitmapPool bitmapPool)
         {
             _expectedWidth = expectedWidth;
             _expectedHeight = expectedHeight;
+            _bitmapPool = bitmapPool;
 
             MFHelpers.Check(MFNative.MFStartup(MFConstants.MF_VERSION, MFConstants.MFSTARTUP_LITE), "MFStartup");
 
@@ -391,7 +393,8 @@ namespace ExtentDesktop.Receiver
                 MFHelpers.Check(mediaBuffer.Lock(out p, out maxLen, out curLen), "OutputBuffer.Lock");
                 try
                 {
-                    var bitmap = new Bitmap(width, height, PixelFormat.Format32bppRgb);
+                    var bitmap = _bitmapPool != null ? _bitmapPool.Take(width, height) : new Bitmap(width, height, PixelFormat.Format32bppRgb);
+                    if (_bitmapPool != null) bitmap.Tag = _bitmapPool;
                     var rect = new Rectangle(0, 0, width, height);
                     var bits = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
                     try

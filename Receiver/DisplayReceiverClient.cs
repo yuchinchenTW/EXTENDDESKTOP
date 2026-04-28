@@ -18,6 +18,7 @@ namespace ExtentDesktop.Receiver
         private Thread _receiveThread;
         private Thread _decodeThread;
         private H264Decoder _decoder;
+        private FrameBitmapPool _bitmapPool;
         private volatile bool _running;
 
         public DisplayReceiverClient(Action<string> statusCallback, Action<Bitmap, int, int> frameCallback)
@@ -109,6 +110,12 @@ namespace ExtentDesktop.Receiver
                 _decoder = null;
             }
 
+            if (_bitmapPool != null)
+            {
+                try { _bitmapPool.Dispose(); } catch { }
+                _bitmapPool = null;
+            }
+
             if (wasRunning)
             {
                 _statusCallback("Disconnected.");
@@ -168,7 +175,8 @@ namespace ExtentDesktop.Receiver
                     {
                         try
                         {
-                            _decoder = new H264Decoder(frame.Width, frame.Height);
+                            _bitmapPool = new FrameBitmapPool();
+                            _decoder = new H264Decoder(frame.Width, frame.Height, _bitmapPool);
                         }
                         catch (Exception ex)
                         {

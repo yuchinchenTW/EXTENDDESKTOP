@@ -41,6 +41,7 @@ $receiverSources = @(
     (Join-Path $root "Receiver\ReceiverForm.cs")
     (Join-Path $root "Receiver\DisplayReceiverClient.cs")
     (Join-Path $root "Receiver\H264Decoder.cs")
+    (Join-Path $root "Receiver\FrameBitmapPool.cs")
     (Join-Path $root "Receiver\HostDiscoveryListener.cs")
 ) + $shared
 
