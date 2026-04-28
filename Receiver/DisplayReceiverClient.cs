@@ -19,6 +19,7 @@ namespace ExtentDesktop.Receiver
         private Thread _decodeThread;
         private H264Decoder _decoder;
         private FrameBitmapPool _bitmapPool;
+        private System.Threading.Timer _keepWarmTimer;
         private volatile bool _running;
 
         public DisplayReceiverClient(Action<string> statusCallback, Action<Bitmap, int, int> frameCallback)
@@ -72,6 +73,8 @@ namespace ExtentDesktop.Receiver
             _decodeThread.Priority = ThreadPriority.Highest;
             _decodeThread.Start();
 
+            _keepWarmTimer = new System.Threading.Timer(KeepWarmTick, null, 3000, 3000);
+
             _statusCallback("Connected.");
         }
 
@@ -110,6 +113,12 @@ namespace ExtentDesktop.Receiver
             {
                 try { _decoder.Dispose(); } catch { }
                 _decoder = null;
+            }
+
+            if (_keepWarmTimer != null)
+            {
+                try { _keepWarmTimer.Dispose(); } catch { }
+                _keepWarmTimer = null;
             }
 
             if (_bitmapPool != null)
@@ -185,6 +194,18 @@ namespace ExtentDesktop.Receiver
             long delta = total - _lastCpuTicks;
             _lastCpuTicks = total;
             return delta / 10000L;
+        }
+
+        private void KeepWarmTick(object state)
+        {
+            try
+            {
+                var pool = _bitmapPool;
+                if (pool != null) pool.TouchAll();
+            }
+            catch
+            {
+            }
         }
 
         private long GetProcessCpuMs()

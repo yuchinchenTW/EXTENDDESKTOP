@@ -14,6 +14,44 @@ namespace ExtentDesktop.Receiver
         private const int Capacity = 4;
         private bool _disposed;
 
+        public void TouchAll()
+        {
+            Bitmap[] snapshot;
+            lock (_sync)
+            {
+                if (_disposed || _available.Count == 0) return;
+                snapshot = _available.ToArray();
+            }
+
+            foreach (var bmp in snapshot)
+            {
+                try
+                {
+                    var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+                    var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
+                    try
+                    {
+                        long stride = data.Stride;
+                        long height = data.Height;
+                        long total = stride * height;
+                        IntPtr p = data.Scan0;
+                        long step = 4096;
+                        for (long off = 0; off < total; off += step)
+                        {
+                            System.Runtime.InteropServices.Marshal.ReadByte(p, (int)off);
+                        }
+                    }
+                    finally
+                    {
+                        bmp.UnlockBits(data);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
         public Bitmap Take(int width, int height)
         {
             lock (_sync)
