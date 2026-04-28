@@ -19,6 +19,7 @@ namespace ExtentDesktop.Host
         private bool _encoderProvidesOutputSamples;
         private long _frameIndex;
         private bool _streaming;
+        private byte[] _outputScratch = new byte[256 * 1024];
 
         public H264Encoder(int width, int height, int fps, int bitrate)
         {
@@ -376,8 +377,8 @@ namespace ExtentDesktop.Host
                 SetVariantBool(codecApi, ref lowLatencyKey, true);
                 SetVariantUInt32(codecApi, ref bFramesKey, 0);
                 SetVariantUInt32(codecApi, ref rateModeKey, (uint)MFConstants.eAVEncCommonRateControlMode_Quality);
-                SetVariantUInt32(codecApi, ref qualityKey, 70);
-                SetVariantUInt32(codecApi, ref gopKey, (uint)_fps);
+                SetVariantUInt32(codecApi, ref qualityKey, 85);
+                SetVariantUInt32(codecApi, ref gopKey, (uint)(_fps * 5));
             }
             catch
             {
@@ -544,8 +545,12 @@ namespace ExtentDesktop.Host
                     {
                         if (curLen > 0)
                         {
-                            buffer = new byte[curLen];
-                            Marshal.Copy(p, buffer, 0, curLen);
+                            if (curLen > _outputScratch.Length)
+                            {
+                                _outputScratch = new byte[Math.Max(curLen, _outputScratch.Length * 2)];
+                            }
+                            Marshal.Copy(p, _outputScratch, 0, curLen);
+                            buffer = _outputScratch;
                             length = curLen;
                         }
                     }
