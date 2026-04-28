@@ -62,6 +62,7 @@ namespace ExtentDesktop.Shared
         public const int eAVEncCommonRateControlMode_UnconstrainedVBR = 2;
         public const int eAVEncCommonRateControlMode_Quality = 3;
 
+        public const int MFT_MESSAGE_SET_D3D_MANAGER = 2;
         public const int MFT_MESSAGE_NOTIFY_BEGIN_STREAMING = 0x10000000;
         public const int MFT_MESSAGE_NOTIFY_END_STREAMING = 0x10000001;
         public const int MFT_MESSAGE_NOTIFY_END_OF_STREAM = 0x10000002;
@@ -306,6 +307,31 @@ namespace ExtentDesktop.Shared
         [PreserveSig] int CopyToBuffer(IMFMediaBuffer pBuffer);
     }
 
+    [ComImport, Guid("eb533d5d-2db6-40f8-97a9-494692014f07"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IMFDXGIDeviceManager
+    {
+        [PreserveSig] int CloseDeviceHandle(IntPtr hDevice);
+        [PreserveSig] int GetVideoService(IntPtr hDevice, ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object ppService);
+        [PreserveSig] int LockDevice(IntPtr hDevice, ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object ppUnkDevice, [MarshalAs(UnmanagedType.Bool)] bool fBlock);
+        [PreserveSig] int OpenDeviceHandle(out IntPtr phDevice);
+        [PreserveSig] int ResetDevice([MarshalAs(UnmanagedType.IUnknown)] object pUnkDevice, int resetToken);
+        [PreserveSig] int TestDevice(IntPtr hDevice);
+        [PreserveSig] int UnlockDevice(IntPtr hDevice, [MarshalAs(UnmanagedType.Bool)] bool fSaveState);
+    }
+
+    [ComImport, Guid("9B7E4C8F-342C-4106-A19F-4F2704F689F0"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface ID3D10Multithread
+    {
+        [PreserveSig] void Enter();
+        [PreserveSig] void Leave();
+        [PreserveSig]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        bool SetMultithreadProtected([MarshalAs(UnmanagedType.Bool)] bool bMTProtect);
+        [PreserveSig]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        bool GetMultithreadProtected();
+    }
+
     [ComImport, Guid("7FEE9E9A-4A89-47a6-899C-B6A53A70FB67"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IMFActivate : IMFAttributes
     {
@@ -433,6 +459,22 @@ namespace ExtentDesktop.Shared
 
         [DllImport("ole32.dll", ExactSpelling = true)]
         public static extern void CoTaskMemFree(IntPtr pv);
+
+        [DllImport("mfplat.dll", ExactSpelling = true)]
+        public static extern int MFCreateDXGIDeviceManager(out int resetToken, out IMFDXGIDeviceManager ppDeviceManager);
+
+        [DllImport("d3d11.dll", ExactSpelling = true)]
+        public static extern int D3D11CreateDevice(
+            IntPtr pAdapter,
+            int DriverType,
+            IntPtr Software,
+            int Flags,
+            IntPtr pFeatureLevels,
+            int FeatureLevels,
+            int SDKVersion,
+            [MarshalAs(UnmanagedType.IUnknown)] out object ppDevice,
+            out int pFeatureLevel,
+            [MarshalAs(UnmanagedType.IUnknown)] out object ppImmediateContext);
     }
 
     internal static class MFHelpers

@@ -28,6 +28,8 @@ namespace ExtentDesktop.Receiver
         private IMFMediaBuffer _persistentInputBuffer;
         private IMFSample _persistentInputSample;
         private int _persistentInputCapacity;
+        private IMFDXGIDeviceManager _dxgiManager;
+        private object _d3dDevice;
 
         public H264Decoder(int expectedWidth, int expectedHeight, FrameBitmapPool bitmapPool)
         {
@@ -182,6 +184,16 @@ namespace ExtentDesktop.Receiver
                 Marshal.ReleaseComObject(_decoder);
                 _decoder = null;
             }
+            if (_dxgiManager != null)
+            {
+                Marshal.ReleaseComObject(_dxgiManager);
+                _dxgiManager = null;
+            }
+            if (_d3dDevice != null)
+            {
+                Marshal.ReleaseComObject(_d3dDevice);
+                _d3dDevice = null;
+            }
             _streaming = false;
             _converterStreaming = false;
             _converterReady = false;
@@ -197,9 +209,94 @@ namespace ExtentDesktop.Receiver
             MFHelpers.Check(hr, "CoCreateInstance(H264 Decoder)");
             _decoder = (IMFTransform)decoderObj;
 
+            TryAttachD3DManager();
             SetDecoderLowLatency();
             SetInputTypeFromAvailable();
             TryNegotiateOutputType();
+        }
+
+        private void TryAttachD3DManager()
+        {
+            try
+            {
+                const int D3D_DRIVER_TYPE_HARDWARE = 1;
+                const int D3D11_CREATE_DEVICE_BGRA_SUPPORT = 0x20;
+                const int D3D11_CREATE_DEVICE_VIDEO_SUPPORT = 0x800;
+                const int D3D11_SDK_VERSION = 7;
+
+                object device, ctx;
+                int featureLevel;
+                int hr = MFNative.D3D11CreateDevice(
+                    IntPtr.Zero,
+                    D3D_DRIVER_TYPE_HARDWARE,
+                    IntPtr.Zero,
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                    IntPtr.Zero, 0, D3D11_SDK_VERSION,
+                    out device, out featureLevel, out ctx);
+                MFHelpers.LogHr("D3D11CreateDevice", hr);
+                if (hr < 0 || device == null) return;
+
+                if (ctx != null) { Marshal.ReleaseComObject(ctx); }
+
+                try
+                {
+                    var mt = device as ID3D10Multithread;
+                    if (mt != null)
+                    {
+                        mt.SetMultithreadProtected(true);
+                        MFHelpers.Log("ID3D10Multithread.SetMultithreadProtected(true)");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MFHelpers.Log("Multithread protect failed: " + ex.Message);
+                }
+
+                int resetToken;
+                IMFDXGIDeviceManager mgr;
+                hr = MFNative.MFCreateDXGIDeviceManager(out resetToken, out mgr);
+                MFHelpers.LogHr("MFCreateDXGIDeviceManager", hr);
+                if (hr < 0)
+                {
+                    Marshal.ReleaseComObject(device);
+                    return;
+                }
+
+                hr = mgr.ResetDevice(device, resetToken);
+                MFHelpers.LogHr("DXGIManager.ResetDevice", hr);
+                if (hr < 0)
+                {
+                    Marshal.ReleaseComObject(mgr);
+                    Marshal.ReleaseComObject(device);
+                    return;
+                }
+
+                IntPtr mgrPtr = Marshal.GetIUnknownForObject(mgr);
+                try
+                {
+                    hr = _decoder.ProcessMessage(MFConstants.MFT_MESSAGE_SET_D3D_MANAGER, mgrPtr);
+                    MFHelpers.LogHr("SET_D3D_MANAGER on decoder", hr);
+                }
+                finally
+                {
+                    Marshal.Release(mgrPtr);
+                }
+
+                if (hr < 0)
+                {
+                    Marshal.ReleaseComObject(mgr);
+                    Marshal.ReleaseComObject(device);
+                    return;
+                }
+
+                _dxgiManager = mgr;
+                _d3dDevice = device;
+                MFHelpers.Log("=== D3D11 manager attached: decoder runs DXVA HW path ===");
+            }
+            catch (Exception ex)
+            {
+                MFHelpers.Log("TryAttachD3DManager threw: " + ex.Message);
+            }
         }
 
         private void SetDecoderLowLatency()
