@@ -217,7 +217,10 @@ namespace ExtentDesktop.Receiver
             MFHelpers.Check(hr, "CoCreateInstance(H264 Decoder)");
             _decoder = (IMFTransform)decoderObj;
 
-            TryAttachD3DManager();
+            // DXVA + VP MFT path requires HW H.264 decoder MFT (via MFTEnumEx)
+            // for proper async event handling. SW decoder + D3D manager is a
+            // hybrid that breaks after the first frame. Disabled until rewritten.
+            // TryAttachD3DManager();
             SetDecoderLowLatency();
             SetInputTypeFromAvailable();
             TryNegotiateOutputType();
