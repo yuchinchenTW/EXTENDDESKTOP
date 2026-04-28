@@ -370,9 +370,13 @@ namespace ExtentDesktop.Host
                 var lowLatencyKey = MFGuids.CODECAPI_AVLowLatencyMode;
                 var rateModeKey = MFGuids.CODECAPI_AVEncCommonRateControlMode;
                 var gopKey = MFGuids.CODECAPI_AVEncMPVGOPSize;
+                var bFramesKey = MFGuids.CODECAPI_AVEncMPVDefaultBPictureCount;
+                var qualityKey = MFGuids.CODECAPI_AVEncCommonQuality;
 
                 SetVariantBool(codecApi, ref lowLatencyKey, true);
-                SetVariantUInt32(codecApi, ref rateModeKey, (uint)MFConstants.eAVEncCommonRateControlMode_CBR);
+                SetVariantUInt32(codecApi, ref bFramesKey, 0);
+                SetVariantUInt32(codecApi, ref rateModeKey, (uint)MFConstants.eAVEncCommonRateControlMode_Quality);
+                SetVariantUInt32(codecApi, ref qualityKey, 70);
                 SetVariantUInt32(codecApi, ref gopKey, (uint)_fps);
             }
             catch

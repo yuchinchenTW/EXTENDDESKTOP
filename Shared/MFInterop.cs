@@ -29,6 +29,8 @@ namespace ExtentDesktop.Shared
         public static readonly Guid CODECAPI_AVEncCommonRateControlMode = new Guid("1C0608E9-370C-4710-8A58-CB6181C42423");
         public static readonly Guid CODECAPI_AVEncCommonMeanBitRate = new Guid("F7222374-2144-4815-B550-A37F8E12EE52");
         public static readonly Guid CODECAPI_AVEncMPVGOPSize = new Guid("95F31B26-95A4-4DA1-AE8B-7595A09EB2EE");
+        public static readonly Guid CODECAPI_AVEncMPVDefaultBPictureCount = new Guid("8d390aac-dc5c-4200-b57f-814d04bafab2");
+        public static readonly Guid CODECAPI_AVEncCommonQuality = new Guid("fcbf57a3-7ea5-4b0c-9644-69b40c39c391");
 
         public static readonly Guid IID_ICodecAPI = new Guid("901db4c7-31ce-41a2-85dc-8fa0bf41b8da");
 

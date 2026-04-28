@@ -206,7 +206,7 @@ namespace ExtentDesktop.Receiver
             private readonly System.Collections.Generic.Queue<FrameData> _queue = new System.Collections.Generic.Queue<FrameData>();
             private readonly AutoResetEvent _available = new AutoResetEvent(false);
             private readonly AutoResetEvent _slotFreed = new AutoResetEvent(false);
-            private const int MaxDepth = 2;
+            private const int MaxDepth = 1;
             private volatile bool _completed;
 
             public void Update(int width, int height, byte[] jpegBytes)

@@ -23,75 +23,61 @@ namespace ExtentDesktop.Host
             using (var encoder = new H264Encoder(encodedWidth, encodedHeight, fps, bitrate))
             using (var capturer = new GdiCaptureSession(captureBoundsProvider, encodedWidth, encodedHeight))
             {
-                var pipe = new EncodedFramePipe();
-                var senderThread = new Thread(delegate()
+                var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                var nextFrameTicks = watch.ElapsedTicks;
+
+                while (!token.IsCancellationRequested)
                 {
-                    SenderLoop(pipe, stream, writeSync, encodedWidth, encodedHeight, token);
-                });
-                senderThread.IsBackground = true;
-                senderThread.Name = "FrameSender";
-
-                try
-                {
-                    senderThread.Start();
-
-                    var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
-                    var watch = System.Diagnostics.Stopwatch.StartNew();
-                    var nextFrameTicks = watch.ElapsedTicks;
-
-                    while (!token.IsCancellationRequested)
+                    BitmapData locked;
+                    if (capturer.TryCaptureLocked(out locked))
                     {
-                        BitmapData locked;
-                        if (capturer.TryCaptureLocked(out locked))
+                        try
                         {
-                            try
-                            {
-                                encoder.Submit(locked.Scan0, locked.Stride);
-                            }
-                            finally
-                            {
-                                capturer.UnlockCaptured();
-                            }
-
-                            byte[] outputBytes;
-                            int outputLen;
-                            bool isKeyframe;
-                            while (encoder.TryDrainOutput(out outputBytes, out outputLen, out isKeyframe))
-                            {
-                                pipe.Submit(new EncodedFrame
-                                {
-                                    Buffer = outputBytes,
-                                    Length = outputLen,
-                                    IsKeyframe = isKeyframe
-                                });
-                            }
+                            encoder.Submit(locked.Scan0, locked.Stride);
+                        }
+                        finally
+                        {
+                            capturer.UnlockCaptured();
                         }
 
-                        nextFrameTicks += targetFrameTicks;
-                        var remainingTicks = nextFrameTicks - watch.ElapsedTicks;
-                        if (remainingTicks > 0)
+                        byte[] outputBytes;
+                        int outputLen;
+                        bool isKeyframe;
+                        while (encoder.TryDrainOutput(out outputBytes, out outputLen, out isKeyframe))
                         {
-                            var remainingMs = (int)(remainingTicks * 1000L / System.Diagnostics.Stopwatch.Frequency);
-                            if (remainingMs > 0 && token.WaitHandle.WaitOne(remainingMs))
+                            int len = outputLen;
+                            byte[] buf = outputBytes;
+                            try
+                            {
+                                Protocol.SendMessage(stream, writeSync, MessageType.Frame, delegate(BinaryWriter writer)
+                                {
+                                    writer.Write(encodedWidth);
+                                    writer.Write(encodedHeight);
+                                    writer.Write(len);
+                                    writer.Write(buf, 0, len);
+                                });
+                            }
+                            catch
                             {
                                 return;
                             }
                         }
-                        else
+                    }
+
+                    nextFrameTicks += targetFrameTicks;
+                    var remainingTicks = nextFrameTicks - watch.ElapsedTicks;
+                    if (remainingTicks > 0)
+                    {
+                        var remainingMs = (int)(remainingTicks * 1000L / System.Diagnostics.Stopwatch.Frequency);
+                        if (remainingMs > 0 && token.WaitHandle.WaitOne(remainingMs))
                         {
-                            nextFrameTicks = watch.ElapsedTicks;
+                            return;
                         }
                     }
-                }
-                finally
-                {
-                    pipe.Complete();
-                    try
+                    else
                     {
-                        senderThread.Join(1000);
-                    }
-                    catch
-                    {
+                        nextFrameTicks = watch.ElapsedTicks;
                     }
                 }
             }
@@ -115,98 +101,6 @@ namespace ExtentDesktop.Host
             if (bitrate < 1500000) bitrate = 1500000;
             if (bitrate > 25000000) bitrate = 25000000;
             return bitrate;
-        }
-
-        private static void SenderLoop(EncodedFramePipe pipe, NetworkStream stream, object writeSync, int width, int height, CancellationToken token)
-        {
-            while (!token.IsCancellationRequested)
-            {
-                EncodedFrame frame;
-                if (!pipe.TakeNext(out frame))
-                {
-                    return;
-                }
-
-                try
-                {
-                    var localFrame = frame;
-                    Protocol.SendMessage(stream, writeSync, MessageType.Frame, delegate(BinaryWriter writer)
-                    {
-                        writer.Write(width);
-                        writer.Write(height);
-                        writer.Write(localFrame.Length);
-                        writer.Write(localFrame.Buffer, 0, localFrame.Length);
-                    });
-                }
-                catch
-                {
-                    return;
-                }
-            }
-        }
-
-        private sealed class EncodedFrame
-        {
-            public byte[] Buffer;
-            public int Length;
-            public bool IsKeyframe;
-        }
-
-        private sealed class EncodedFramePipe
-        {
-            private readonly object _sync = new object();
-            private readonly System.Collections.Generic.Queue<EncodedFrame> _queue = new System.Collections.Generic.Queue<EncodedFrame>();
-            private readonly AutoResetEvent _available = new AutoResetEvent(false);
-            private readonly AutoResetEvent _slotFreed = new AutoResetEvent(false);
-            private const int MaxDepth = 2;
-            private volatile bool _completed;
-
-            public void Submit(EncodedFrame frame)
-            {
-                while (!_completed)
-                {
-                    lock (_sync)
-                    {
-                        if (_queue.Count < MaxDepth)
-                        {
-                            _queue.Enqueue(frame);
-                            _available.Set();
-                            return;
-                        }
-                    }
-                    _slotFreed.WaitOne(50);
-                }
-            }
-
-            public bool TakeNext(out EncodedFrame frame)
-            {
-                frame = null;
-
-                while (true)
-                {
-                    lock (_sync)
-                    {
-                        if (_queue.Count > 0)
-                        {
-                            frame = _queue.Dequeue();
-                            _slotFreed.Set();
-                            return true;
-                        }
-                        if (_completed)
-                        {
-                            return false;
-                        }
-                    }
-                    _available.WaitOne();
-                }
-            }
-
-            public void Complete()
-            {
-                _completed = true;
-                _available.Set();
-                _slotFreed.Set();
-            }
         }
 
         private sealed class GdiCaptureSession : IDisposable
