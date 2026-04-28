@@ -18,6 +18,14 @@ namespace ExtentDesktop.Receiver
             timeBeginPeriod(1);
             try
             {
+                try
+                {
+                    System.Diagnostics.Process.GetCurrentProcess().PriorityClass = System.Diagnostics.ProcessPriorityClass.AboveNormal;
+                }
+                catch
+                {
+                }
+
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new ReceiverForm());

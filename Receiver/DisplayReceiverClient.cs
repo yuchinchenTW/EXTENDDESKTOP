@@ -64,10 +64,12 @@ namespace ExtentDesktop.Receiver
             _running = true;
             _receiveThread = new Thread(ReceiveLoop);
             _receiveThread.IsBackground = true;
+            _receiveThread.Priority = ThreadPriority.AboveNormal;
             _receiveThread.Start();
 
             _decodeThread = new Thread(DecodeLoop);
             _decodeThread.IsBackground = true;
+            _decodeThread.Priority = ThreadPriority.Highest;
             _decodeThread.Start();
 
             _statusCallback("Connected.");
