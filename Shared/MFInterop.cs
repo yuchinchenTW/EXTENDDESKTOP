@@ -398,6 +398,61 @@ namespace ExtentDesktop.Shared
             return ((ulong)high << 32) | low;
         }
 
+        public static void SetConverterTypeFromAvailable(IMFTransform converter, bool isInput, Guid subtype, int width, int height, int fps, bool includeStride, string label)
+        {
+            for (int i = 0; i < 32; i++)
+            {
+                IMFMediaType template;
+                int getHr = isInput
+                    ? converter.GetInputAvailableType(0, i, out template)
+                    : converter.GetOutputAvailableType(0, i, out template);
+                if (getHr < 0)
+                {
+                    LogHr(label + " GetAvailableType[" + i + "]", getHr);
+                    Check(getHr, label + " (no matching template)");
+                    return;
+                }
+
+                try
+                {
+                    var subKey = MFGuids.MF_MT_SUBTYPE;
+                    Guid templateSub;
+                    if (template.GetGUID(ref subKey, out templateSub) != 0) continue;
+                    if (templateSub != subtype) continue;
+
+                    var sizeKey = MFGuids.MF_MT_FRAME_SIZE;
+                    template.SetUINT64(ref sizeKey, PackUInt64((uint)width, (uint)height));
+
+                    var rateKey = MFGuids.MF_MT_FRAME_RATE;
+                    template.SetUINT64(ref rateKey, PackUInt64((uint)fps, 1));
+
+                    var aspectKey = MFGuids.MF_MT_PIXEL_ASPECT_RATIO;
+                    template.SetUINT64(ref aspectKey, PackUInt64(1, 1));
+
+                    var interlaceKey = MFGuids.MF_MT_INTERLACE_MODE;
+                    template.SetUINT32(ref interlaceKey, (uint)MFConstants.MFVideoInterlace_Progressive);
+
+                    if (includeStride)
+                    {
+                        var strideKey = MFGuids.MF_MT_DEFAULT_STRIDE;
+                        template.SetUINT32(ref strideKey, (uint)(width * 4));
+                    }
+
+                    int setHr = isInput
+                        ? converter.SetInputType(0, template, 0)
+                        : converter.SetOutputType(0, template, 0);
+                    LogHr(label + " SetType(template[" + i + "])", setHr);
+                    if (setHr >= 0) return;
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(template);
+                }
+            }
+
+            Check(unchecked((int)0x80004005), label + " (no template accepted)");
+        }
+
         public static IMFMediaType CreateVideoType(Guid subtype, int width, int height, int fpsNum, int fpsDen)
         {
             IMFMediaType type;

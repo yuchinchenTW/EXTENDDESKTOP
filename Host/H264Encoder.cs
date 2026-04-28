@@ -261,33 +261,8 @@ namespace ExtentDesktop.Host
             MFHelpers.Check(hr, "CoCreateInstance(ColorConvert)");
             _colorConverter = (IMFTransform)converterObj;
 
-            // Set input type RGB32 first (some converters require input first)
-            var inputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_RGB32, _width, _height, _fps, 1);
-            try
-            {
-                var strideKey = MFGuids.MF_MT_DEFAULT_STRIDE;
-                inputType.SetUINT32(ref strideKey, (uint)(_width * 4));
-
-                int inputHr = _colorConverter.SetInputType(0, inputType, 0);
-                MFHelpers.LogHr("ColorConvert SetInputType(RGB32)", inputHr);
-                MFHelpers.Check(inputHr, "ColorConvert SetInputType(RGB32)");
-            }
-            finally
-            {
-                Marshal.ReleaseComObject(inputType);
-            }
-
-            var outputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_NV12, _width, _height, _fps, 1);
-            try
-            {
-                int outputHr = _colorConverter.SetOutputType(0, outputType, 0);
-                MFHelpers.LogHr("ColorConvert SetOutputType(NV12)", outputHr);
-                MFHelpers.Check(outputHr, "ColorConvert SetOutputType(NV12)");
-            }
-            finally
-            {
-                Marshal.ReleaseComObject(outputType);
-            }
+            MFHelpers.SetConverterTypeFromAvailable(_colorConverter, isInput: true, subtype: MFGuids.MFVideoFormat_RGB32, width: _width, height: _height, fps: _fps, includeStride: true, label: "encoder ColorConvert input");
+            MFHelpers.SetConverterTypeFromAvailable(_colorConverter, isInput: false, subtype: MFGuids.MFVideoFormat_NV12, width: _width, height: _height, fps: _fps, includeStride: false, label: "encoder ColorConvert output");
         }
 
         private void SetInputTypeFromAvailable()

@@ -489,32 +489,8 @@ namespace ExtentDesktop.Receiver
             _colorConverter = (IMFTransform)converterObj;
 
             int fps = 60;
-            var inputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_NV12, width, height, fps, 1);
-            try
-            {
-                int inHr = _colorConverter.SetInputType(0, inputType, 0);
-                MFHelpers.LogHr("ColorConvert SetInputType(NV12)", inHr);
-                MFHelpers.Check(inHr, "ColorConvert SetInputType(NV12)");
-            }
-            finally
-            {
-                Marshal.ReleaseComObject(inputType);
-            }
-
-            var outputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_RGB32, width, height, fps, 1);
-            try
-            {
-                var strideKey = MFGuids.MF_MT_DEFAULT_STRIDE;
-                outputType.SetUINT32(ref strideKey, (uint)(width * 4));
-
-                int outHr = _colorConverter.SetOutputType(0, outputType, 0);
-                MFHelpers.LogHr("ColorConvert SetOutputType(RGB32)", outHr);
-                MFHelpers.Check(outHr, "ColorConvert SetOutputType(RGB32)");
-            }
-            finally
-            {
-                Marshal.ReleaseComObject(outputType);
-            }
+            MFHelpers.SetConverterTypeFromAvailable(_colorConverter, isInput: true, subtype: MFGuids.MFVideoFormat_NV12, width: width, height: height, fps: fps, includeStride: false, label: "decoder ColorConvert input");
+            MFHelpers.SetConverterTypeFromAvailable(_colorConverter, isInput: false, subtype: MFGuids.MFVideoFormat_RGB32, width: width, height: height, fps: fps, includeStride: true, label: "decoder ColorConvert output");
 
             int bgraSize = width * 4 * height;
             MFHelpers.Check(MFNative.MFCreateMemoryBuffer(bgraSize, out _bgraBuffer), "MFCreateMemoryBuffer(bgra)");
