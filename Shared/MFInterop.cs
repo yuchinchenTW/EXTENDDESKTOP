@@ -308,6 +308,63 @@ namespace ExtentDesktop.Shared
         [PreserveSig] int CopyToBuffer(IMFMediaBuffer pBuffer);
     }
 
+    [ComImport, Guid("2cd0bd52-bcd5-4b89-b62c-eadc0c031e7d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IMFMediaEventGenerator
+    {
+        [PreserveSig] int GetEvent(uint dwFlags, out IMFMediaEvent ppEvent);
+        [PreserveSig] int BeginGetEvent(IntPtr pCallback, IntPtr punkState);
+        [PreserveSig] int EndGetEvent(IntPtr pResult, out IMFMediaEvent ppEvent);
+        [PreserveSig] int QueueEvent(uint met, ref Guid guidExtendedType, int hrStatus, IntPtr pvValue);
+    }
+
+    [ComImport, Guid("DF598932-F10C-4E39-BBA2-C308F101DAA3"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IMFMediaEvent : IMFAttributes
+    {
+        [PreserveSig] new int GetItem(ref Guid guidKey, IntPtr pValue);
+        [PreserveSig] new int GetItemType(ref Guid guidKey, out int pType);
+        [PreserveSig] new int CompareItem(ref Guid guidKey, IntPtr Value, out bool pbResult);
+        [PreserveSig] new int Compare(IMFAttributes pTheirs, int MatchType, out bool pbResult);
+        [PreserveSig] new int GetUINT32(ref Guid guidKey, out uint punValue);
+        [PreserveSig] new int GetUINT64(ref Guid guidKey, out ulong punValue);
+        [PreserveSig] new int GetDouble(ref Guid guidKey, out double pfValue);
+        [PreserveSig] new int GetGUID(ref Guid guidKey, out Guid pguidValue);
+        [PreserveSig] new int GetStringLength(ref Guid guidKey, out int pcchLength);
+        [PreserveSig] new int GetString(ref Guid guidKey, [MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pwszValue, int cchBufSize, out int pcchLength);
+        [PreserveSig] new int GetAllocatedString(ref Guid guidKey, [MarshalAs(UnmanagedType.LPWStr)] out string ppwszValue, out int pcchLength);
+        [PreserveSig] new int GetBlobSize(ref Guid guidKey, out int pcbBlobSize);
+        [PreserveSig] new int GetBlob(ref Guid guidKey, [Out] byte[] pBuf, int cbBufSize, out int pcbBlobSize);
+        [PreserveSig] new int GetAllocatedBlob(ref Guid guidKey, out IntPtr ppBuf, out int pcbSize);
+        [PreserveSig] new int GetUnknown(ref Guid guidKey, ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object ppv);
+        [PreserveSig] new int SetItem(ref Guid guidKey, IntPtr Value);
+        [PreserveSig] new int DeleteItem(ref Guid guidKey);
+        [PreserveSig] new int DeleteAllItems();
+        [PreserveSig] new int SetUINT32(ref Guid guidKey, uint unValue);
+        [PreserveSig] new int SetUINT64(ref Guid guidKey, ulong unValue);
+        [PreserveSig] new int SetDouble(ref Guid guidKey, double fValue);
+        [PreserveSig] new int SetGUID(ref Guid guidKey, ref Guid guidValue);
+        [PreserveSig] new int SetString(ref Guid guidKey, [MarshalAs(UnmanagedType.LPWStr)] string wszValue);
+        [PreserveSig] new int SetBlob(ref Guid guidKey, byte[] pBuf, int cbBufSize);
+        [PreserveSig] new int SetUnknown(ref Guid guidKey, [MarshalAs(UnmanagedType.IUnknown)] object pUnknown);
+        [PreserveSig] new int LockStore();
+        [PreserveSig] new int UnlockStore();
+        [PreserveSig] new int GetCount(out int pcItems);
+        [PreserveSig] new int GetItemByIndex(int unIndex, out Guid pguidKey, IntPtr pValue);
+        [PreserveSig] new int CopyAllItems(IMFAttributes pDest);
+
+        [PreserveSig] int GetType(out int pmet);
+        [PreserveSig] int GetExtendedType(out Guid pguidExtendedType);
+        [PreserveSig] int GetStatus(out int phrStatus);
+        [PreserveSig] int GetValue(IntPtr pvValue);
+    }
+
+    internal static class MediaEventTypes
+    {
+        public const int METransformNeedInput = 601;
+        public const int METransformHaveOutput = 602;
+        public const int METransformDrainComplete = 603;
+        public const int METransformMarker = 604;
+    }
+
     [ComImport, Guid("eb533d5d-2db6-40f8-97a9-494692014f07"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IMFDXGIDeviceManager
     {

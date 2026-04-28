@@ -31,6 +31,8 @@ namespace ExtentDesktop.Receiver
         private IMFDXGIDeviceManager _dxgiManager;
         private object _d3dDevice;
         private bool _converterProvidesSamples;
+        private bool _converterIsAsync;
+        private IMFMediaEventGenerator _converterEvents;
 
         public H264Decoder(int expectedWidth, int expectedHeight, FrameBitmapPool bitmapPool)
         {
@@ -165,6 +167,11 @@ namespace ExtentDesktop.Receiver
                 Marshal.ReleaseComObject(_bgraBuffer);
                 _bgraBuffer = null;
             }
+            if (_converterEvents != null)
+            {
+                try { Marshal.ReleaseComObject(_converterEvents); } catch { }
+                _converterEvents = null;
+            }
             if (_colorConverter != null)
             {
                 Marshal.ReleaseComObject(_colorConverter);
@@ -210,8 +217,7 @@ namespace ExtentDesktop.Receiver
             MFHelpers.Check(hr, "CoCreateInstance(H264 Decoder)");
             _decoder = (IMFTransform)decoderObj;
 
-            // DXVA path disabled: VP MFT in HW mode is async, needs event loop.
-            // TryAttachD3DManager();
+            TryAttachD3DManager();
             SetDecoderLowLatency();
             SetInputTypeFromAvailable();
             TryNegotiateOutputType();
@@ -544,8 +550,18 @@ namespace ExtentDesktop.Receiver
 
             EnsureColorConverter(width, height);
 
+            if (_converterIsAsync && _converterEvents != null)
+            {
+                WaitForConverterEvent(MediaEventTypes.METransformNeedInput);
+            }
+
             int hr = _colorConverter.ProcessInput(0, sample, 0);
             MFHelpers.Check(hr, "ColorConvert ProcessInput");
+
+            if (_converterIsAsync && _converterEvents != null)
+            {
+                WaitForConverterEvent(MediaEventTypes.METransformHaveOutput);
+            }
 
             var outputs = new MFT_OUTPUT_DATA_BUFFER[1];
             outputs[0].dwStreamID = 0;
@@ -669,6 +685,35 @@ namespace ExtentDesktop.Receiver
 
             if (_dxgiManager != null)
             {
+                try
+                {
+                    IMFAttributes attrs;
+                    int aHr = _colorConverter.GetAttributes(out attrs);
+                    if (aHr == 0 && attrs != null)
+                    {
+                        try
+                        {
+                            uint asyncFlag = 0;
+                            var asyncKey = MFGuids.MFT_TRANSFORM_ASYNC;
+                            if (attrs.GetUINT32(ref asyncKey, out asyncFlag) == 0 && asyncFlag != 0)
+                            {
+                                var unlockKey = MFGuids.MFT_TRANSFORM_ASYNC_UNLOCK;
+                                int uHr = attrs.SetUINT32(ref unlockKey, 1);
+                                MFHelpers.LogHr("Converter ASYNC_UNLOCK", uHr);
+                                if (uHr >= 0) _converterIsAsync = true;
+                            }
+                        }
+                        finally
+                        {
+                            Marshal.ReleaseComObject(attrs);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MFHelpers.Log("Converter async unlock threw: " + ex.Message);
+                }
+
                 IntPtr mgrPtr = Marshal.GetIUnknownForObject(_dxgiManager);
                 try
                 {
@@ -678,6 +723,19 @@ namespace ExtentDesktop.Receiver
                 finally
                 {
                     Marshal.Release(mgrPtr);
+                }
+
+                if (_converterIsAsync)
+                {
+                    try
+                    {
+                        _converterEvents = _colorConverter as IMFMediaEventGenerator;
+                        MFHelpers.Log("Converter IMFMediaEventGenerator obtained=" + (_converterEvents != null));
+                    }
+                    catch (Exception ex)
+                    {
+                        MFHelpers.Log("QI IMFMediaEventGenerator threw: " + ex.Message);
+                    }
                 }
             }
 
@@ -709,6 +767,37 @@ namespace ExtentDesktop.Receiver
             _converterStreaming = true;
             _converterReady = true;
             MFHelpers.Log("=== H264Decoder.ColorConverter ready ===");
+        }
+
+        private void WaitForConverterEvent(int expectedType)
+        {
+            for (int i = 0; i < 1000; i++)
+            {
+                IMFMediaEvent evt;
+                int hr = _converterEvents.GetEvent(0, out evt);
+                if (hr < 0)
+                {
+                    MFHelpers.LogHr("Converter GetEvent", hr);
+                    return;
+                }
+
+                int met = 0;
+                try
+                {
+                    evt.GetType(out met);
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(evt);
+                }
+
+                if (met == expectedType)
+                {
+                    return;
+                }
+            }
+
+            MFHelpers.Log("WaitForConverterEvent: gave up after 1000 events waiting for type=" + expectedType);
         }
 
         [DllImport("kernel32.dll", EntryPoint = "RtlMoveMemory", SetLastError = false)]
