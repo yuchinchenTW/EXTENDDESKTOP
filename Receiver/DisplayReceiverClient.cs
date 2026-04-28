@@ -255,7 +255,7 @@ namespace ExtentDesktop.Receiver
                         }
                         catch (Exception hwEx)
                         {
-                            ExtentDesktop.Shared.MFHelpers.Log("HW decoder init failed, falling back to SW: " + hwEx.Message);
+                            ExtentDesktop.Shared.MFHelpers.Log("HW decoder init failed, using SW: " + hwEx.Message);
                             try
                             {
                                 _decoder = new H264Decoder(frame.Width, frame.Height, _bitmapPool);
@@ -266,12 +266,15 @@ namespace ExtentDesktop.Receiver
                                 return;
                             }
                         }
+                        // First-frame init time is not representative; reset t0 after init
+                        t0 = sw.ElapsedTicks;
                     }
 
                     long accumProcOut = 0;
                     long accumConv = 0;
                     int drainIters = 0;
                     Bitmap decoded;
+                    long tSubmit;
 
                     if (_hwDecoder != null)
                     {
@@ -279,6 +282,7 @@ namespace ExtentDesktop.Receiver
                         _hwDecoder.AccumulatedConvertTicks = 0;
                         _hwDecoder.Submit(frame.PayloadBuffer, frame.PayloadLength);
                         _latestFrame.ReturnBuffer(frame.PayloadBuffer);
+                        tSubmit = sw.ElapsedTicks;
                         while (_hwDecoder.TryDrainBitmap(out decoded))
                         {
                             drainIters++;
@@ -293,6 +297,7 @@ namespace ExtentDesktop.Receiver
                         _decoder.AccumulatedConvertTicks = 0;
                         _decoder.Submit(frame.PayloadBuffer, frame.PayloadLength);
                         _latestFrame.ReturnBuffer(frame.PayloadBuffer);
+                        tSubmit = sw.ElapsedTicks;
                         while (_decoder.TryDrainBitmap(out decoded))
                         {
                             drainIters++;
@@ -302,17 +307,18 @@ namespace ExtentDesktop.Receiver
                         accumConv = _decoder.AccumulatedConvertTicks;
                     }
 
-                    long tSubmit = sw.ElapsedTicks;
                     long tDrain = sw.ElapsedTicks;
 
                     long totalMs = (tDrain - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
                     if (totalMs > 35)
                     {
+                        long subMs = (tSubmit - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                        long drainMs = (tDrain - tSubmit) * 1000L / System.Diagnostics.Stopwatch.Frequency;
                         long procMs = accumProcOut * 1000L / System.Diagnostics.Stopwatch.Frequency;
                         long convMs = accumConv * 1000L / System.Diagnostics.Stopwatch.Frequency;
                         long cpuMs = GetThreadCpuMs();
                         long procMsCpu = GetProcessCpuMs();
-                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms iters=" + drainIters + " procOutSum=" + procMs + " convSum=" + convMs + " thrCpu=" + cpuMs + " procCpu=" + procMsCpu);
+                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs + " iters=" + drainIters + " procOutSum=" + procMs + " convSum=" + convMs + " thrCpu=" + cpuMs + " procCpu=" + procMsCpu);
                     }
                 }
                 catch (Exception ex)
