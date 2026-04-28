@@ -18,6 +18,7 @@ namespace ExtentDesktop.Receiver
         private Thread _receiveThread;
         private Thread _decodeThread;
         private H264Decoder _decoder;
+        private H264HwDecoder _hwDecoder;
         private FrameBitmapPool _bitmapPool;
         private System.Threading.Timer _keepWarmTimer;
         private volatile bool _running;
@@ -109,6 +110,11 @@ namespace ExtentDesktop.Receiver
                 _decodeThread = null;
             }
 
+            if (_hwDecoder != null)
+            {
+                try { _hwDecoder.Dispose(); } catch { }
+                _hwDecoder = null;
+            }
             if (_decoder != null)
             {
                 try { _decoder.Dispose(); } catch { }
@@ -239,48 +245,74 @@ namespace ExtentDesktop.Receiver
 
                 try
                 {
-                    if (_decoder == null)
+                    if (_decoder == null && _hwDecoder == null)
                     {
+                        _bitmapPool = new FrameBitmapPool();
                         try
                         {
-                            _bitmapPool = new FrameBitmapPool();
-                            _decoder = new H264Decoder(frame.Width, frame.Height, _bitmapPool);
+                            _hwDecoder = new H264HwDecoder(frame.Width, frame.Height, _bitmapPool);
+                            ExtentDesktop.Shared.MFHelpers.Log("Using H.264 HW decoder path");
                         }
-                        catch (Exception ex)
+                        catch (Exception hwEx)
                         {
-                            _statusCallback("H.264 init failed: " + ex.Message);
-                            return;
+                            ExtentDesktop.Shared.MFHelpers.Log("HW decoder init failed, falling back to SW: " + hwEx.Message);
+                            try
+                            {
+                                _decoder = new H264Decoder(frame.Width, frame.Height, _bitmapPool);
+                            }
+                            catch (Exception ex)
+                            {
+                                _statusCallback("H.264 init failed: " + ex.Message);
+                                return;
+                            }
                         }
                     }
 
-                    _decoder.Submit(frame.PayloadBuffer, frame.PayloadLength);
-                    _latestFrame.ReturnBuffer(frame.PayloadBuffer);
-                    long tSubmit = sw.ElapsedTicks;
-
-                    _decoder.AccumulatedProcessOutputTicks = 0;
-                    _decoder.AccumulatedConvertTicks = 0;
+                    long accumProcOut = 0;
+                    long accumConv = 0;
                     int drainIters = 0;
                     Bitmap decoded;
-                    while (_decoder.TryDrainBitmap(out decoded))
+
+                    if (_hwDecoder != null)
                     {
-                        drainIters++;
-                        if (decoded != null)
+                        _hwDecoder.AccumulatedProcessOutputTicks = 0;
+                        _hwDecoder.AccumulatedConvertTicks = 0;
+                        _hwDecoder.Submit(frame.PayloadBuffer, frame.PayloadLength);
+                        _latestFrame.ReturnBuffer(frame.PayloadBuffer);
+                        while (_hwDecoder.TryDrainBitmap(out decoded))
                         {
-                            _frameCallback(decoded, frame.Width, frame.Height);
+                            drainIters++;
+                            if (decoded != null) _frameCallback(decoded, frame.Width, frame.Height);
                         }
+                        accumProcOut = _hwDecoder.AccumulatedProcessOutputTicks;
+                        accumConv = _hwDecoder.AccumulatedConvertTicks;
                     }
+                    else
+                    {
+                        _decoder.AccumulatedProcessOutputTicks = 0;
+                        _decoder.AccumulatedConvertTicks = 0;
+                        _decoder.Submit(frame.PayloadBuffer, frame.PayloadLength);
+                        _latestFrame.ReturnBuffer(frame.PayloadBuffer);
+                        while (_decoder.TryDrainBitmap(out decoded))
+                        {
+                            drainIters++;
+                            if (decoded != null) _frameCallback(decoded, frame.Width, frame.Height);
+                        }
+                        accumProcOut = _decoder.AccumulatedProcessOutputTicks;
+                        accumConv = _decoder.AccumulatedConvertTicks;
+                    }
+
+                    long tSubmit = sw.ElapsedTicks;
                     long tDrain = sw.ElapsedTicks;
 
                     long totalMs = (tDrain - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
                     if (totalMs > 35)
                     {
-                        long subMs = (tSubmit - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                        long drainMs = (tDrain - tSubmit) * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                        long procMs = _decoder.AccumulatedProcessOutputTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                        long convMs = _decoder.AccumulatedConvertTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                        long procMs = accumProcOut * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                        long convMs = accumConv * 1000L / System.Diagnostics.Stopwatch.Frequency;
                         long cpuMs = GetThreadCpuMs();
                         long procMsCpu = GetProcessCpuMs();
-                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs + " iters=" + drainIters + " procOutSum=" + procMs + " convSum=" + convMs + " thrCpu=" + cpuMs + " procCpu=" + procMsCpu);
+                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms iters=" + drainIters + " procOutSum=" + procMs + " convSum=" + convMs + " thrCpu=" + cpuMs + " procCpu=" + procMsCpu);
                     }
                 }
                 catch (Exception ex)
