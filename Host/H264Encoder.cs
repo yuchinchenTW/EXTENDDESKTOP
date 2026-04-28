@@ -377,7 +377,7 @@ namespace ExtentDesktop.Host
                 SetVariantBool(codecApi, ref lowLatencyKey, true);
                 SetVariantUInt32(codecApi, ref bFramesKey, 0);
                 SetVariantUInt32(codecApi, ref rateModeKey, (uint)MFConstants.eAVEncCommonRateControlMode_Quality);
-                SetVariantUInt32(codecApi, ref qualityKey, 85);
+                SetVariantUInt32(codecApi, ref qualityKey, 95);
                 SetVariantUInt32(codecApi, ref gopKey, (uint)(_fps * 5));
             }
             catch
