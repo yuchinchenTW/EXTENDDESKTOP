@@ -610,13 +610,41 @@ namespace ExtentDesktop.Receiver
 
             MFHelpers.Log("=== H264Decoder.CreateColorConverter " + width + "x" + height + " ===");
 
-            var clsid = MFGuids.CLSID_CColorConvertDMO;
             var iid = new Guid("bf94c121-5b05-4e6f-8000-ba598961414d");
-            object converterObj;
-            int hr = MFNative.CoCreateInstance(ref clsid, IntPtr.Zero, MFConstants.CLSCTX_INPROC_SERVER, ref iid, out converterObj);
-            MFHelpers.LogHr("CoCreateInstance(ColorConvert)", hr);
-            MFHelpers.Check(hr, "CoCreateInstance(ColorConvert)");
+            object converterObj = null;
+            int hr;
+
+            if (_dxgiManager != null)
+            {
+                var vpClsid = MFGuids.CLSID_VideoProcessorMFT;
+                hr = MFNative.CoCreateInstance(ref vpClsid, IntPtr.Zero, MFConstants.CLSCTX_INPROC_SERVER, ref iid, out converterObj);
+                MFHelpers.LogHr("CoCreateInstance(VideoProcessorMFT)", hr);
+                if (hr < 0) converterObj = null;
+            }
+
+            if (converterObj == null)
+            {
+                var clsid = MFGuids.CLSID_CColorConvertDMO;
+                hr = MFNative.CoCreateInstance(ref clsid, IntPtr.Zero, MFConstants.CLSCTX_INPROC_SERVER, ref iid, out converterObj);
+                MFHelpers.LogHr("CoCreateInstance(ColorConvertDMO fallback)", hr);
+                MFHelpers.Check(hr, "CoCreateInstance(color converter)");
+            }
+
             _colorConverter = (IMFTransform)converterObj;
+
+            if (_dxgiManager != null)
+            {
+                IntPtr mgrPtr = Marshal.GetIUnknownForObject(_dxgiManager);
+                try
+                {
+                    int dhr = _colorConverter.ProcessMessage(MFConstants.MFT_MESSAGE_SET_D3D_MANAGER, mgrPtr);
+                    MFHelpers.LogHr("Converter SET_D3D_MANAGER", dhr);
+                }
+                finally
+                {
+                    Marshal.Release(mgrPtr);
+                }
+            }
 
             int fps = 60;
             MFHelpers.SetConverterTypeFromAvailable(_colorConverter, isInput: true, subtype: MFGuids.MFVideoFormat_NV12, width: width, height: height, fps: fps, includeStride: false, label: "decoder ColorConvert input");

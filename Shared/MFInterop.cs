@@ -10,6 +10,7 @@ namespace ExtentDesktop.Shared
         public static readonly Guid MFVideoFormat_NV12 = new Guid("3231564E-0000-0010-8000-00AA00389B71");
         public static readonly Guid MFVideoFormat_RGB32 = new Guid("00000016-0000-0010-8000-00AA00389B71");
         public static readonly Guid CLSID_CColorConvertDMO = new Guid("98230571-0087-4204-b020-3282538e57d3");
+        public static readonly Guid CLSID_VideoProcessorMFT = new Guid("88753b26-5b24-49bd-b2e7-0c445c78c982");
 
         public static readonly Guid MF_MT_MAJOR_TYPE = new Guid("48eba18e-f8c9-4687-bf11-0a74c9f96a5f");
         public static readonly Guid MF_MT_SUBTYPE = new Guid("f7e34c9a-42e8-4714-b74b-cb29d72c35e5");
