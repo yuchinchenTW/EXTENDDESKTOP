@@ -12,13 +12,19 @@ namespace ExtentDesktop.Host
         private readonly long _frameDurationTicks;
 
         private IMFTransform _encoder;
+        private IMFTransform _colorConverter;
         private IMFSample _outputSample;
         private IMFMediaBuffer _outputBuffer;
         private IMFMediaBuffer _inputBuffer;
         private int _inputBufferCapacity;
+        private IMFMediaBuffer _bgraBuffer;
+        private int _bgraBufferCapacity;
+        private IMFSample _bgraSample;
+        private IMFSample _nv12Sample;
         private bool _encoderProvidesOutputSamples;
         private long _frameIndex;
         private bool _streaming;
+        private bool _converterStreaming;
         private byte[] _outputScratch = new byte[256 * 1024];
 
         public H264Encoder(int width, int height, int fps, int bitrate)
@@ -39,6 +45,7 @@ namespace ExtentDesktop.Host
             {
                 CreateEncoder(bitrate);
                 ConfigureCodecApi();
+                CreateColorConverter();
                 AllocateBuffers();
                 StartStreaming();
             }
@@ -52,18 +59,96 @@ namespace ExtentDesktop.Host
 
         public void Submit(IntPtr bgraData, int bgraStride)
         {
-            IMFSample inputSample;
-            FillInputSample(bgraData, bgraStride, out inputSample);
+            CopyBgraIntoBuffer(bgraData, bgraStride);
+
+            long pts = _frameIndex * _frameDurationTicks;
+            _frameIndex++;
+
+            MFHelpers.Check(_bgraSample.SetSampleTime(pts), "BgraSample.SetSampleTime");
+            MFHelpers.Check(_bgraSample.SetSampleDuration(_frameDurationTicks), "BgraSample.SetSampleDuration");
+
+            int hr = _colorConverter.ProcessInput(0, _bgraSample, 0);
+            MFHelpers.Check(hr, "ColorConvert ProcessInput");
+
+            DrainColorConverterToEncoder(pts);
+        }
+
+        private void DrainColorConverterToEncoder(long pts)
+        {
+            while (true)
+            {
+                MFHelpers.Check(_inputBuffer.SetCurrentLength(0), "NV12 SetCurrentLength(0)");
+
+                var outputs = new MFT_OUTPUT_DATA_BUFFER[1];
+                outputs[0].dwStreamID = 0;
+                outputs[0].pSample = _nv12Sample;
+                outputs[0].dwStatus = 0;
+                outputs[0].pEvents = null;
+
+                uint status;
+                int hr = _colorConverter.ProcessOutput(0, 1, outputs, out status);
+
+                if (hr == MFConstants.MF_E_TRANSFORM_NEED_MORE_INPUT)
+                {
+                    return;
+                }
+
+                if (hr == MFConstants.MF_E_TRANSFORM_STREAM_CHANGE)
+                {
+                    IMFMediaType newType;
+                    if (_colorConverter.GetOutputAvailableType(0, 0, out newType) == 0)
+                    {
+                        try { _colorConverter.SetOutputType(0, newType, 0); }
+                        finally { Marshal.ReleaseComObject(newType); }
+                    }
+                    continue;
+                }
+
+                MFHelpers.Check(hr, "ColorConvert ProcessOutput");
+
+                MFHelpers.Check(_nv12Sample.SetSampleTime(pts), "Nv12Sample.SetSampleTime");
+                MFHelpers.Check(_nv12Sample.SetSampleDuration(_frameDurationTicks), "Nv12Sample.SetSampleDuration");
+
+                int encHr = _encoder.ProcessInput(0, _nv12Sample, 0);
+                MFHelpers.Check(encHr, "Encoder ProcessInput");
+                return;
+            }
+        }
+
+        private void CopyBgraIntoBuffer(IntPtr bgraData, int bgraStride)
+        {
+            IntPtr p;
+            int maxLen, curLen;
+            MFHelpers.Check(_bgraBuffer.Lock(out p, out maxLen, out curLen), "BgraBuffer.Lock");
             try
             {
-                int hr = _encoder.ProcessInput(0, inputSample, 0);
-                MFHelpers.Check(hr, "ProcessInput");
+                int dstStride = _width * 4;
+                if (bgraStride == dstStride)
+                {
+                    MFCopyBytes(bgraData, p, _bgraBufferCapacity);
+                }
+                else
+                {
+                    for (int y = 0; y < _height; y++)
+                    {
+                        MFCopyBytes(IntPtr.Add(bgraData, y * bgraStride), IntPtr.Add(p, y * dstStride), dstStride);
+                    }
+                }
             }
             finally
             {
-                Marshal.ReleaseComObject(inputSample);
+                MFHelpers.Check(_bgraBuffer.Unlock(), "BgraBuffer.Unlock");
             }
+            MFHelpers.Check(_bgraBuffer.SetCurrentLength(_bgraBufferCapacity), "BgraBuffer.SetCurrentLength");
         }
+
+        private static void MFCopyBytes(IntPtr src, IntPtr dst, int count)
+        {
+            RtlMoveMemory(dst, src, (UIntPtr)count);
+        }
+
+        [DllImport("kernel32.dll", EntryPoint = "RtlMoveMemory", SetLastError = false)]
+        private static extern void RtlMoveMemory(IntPtr dest, IntPtr src, UIntPtr count);
 
         public bool TryDrainOutput(out byte[] buffer, out int length, out bool isKeyframe)
         {
@@ -78,6 +163,11 @@ namespace ExtentDesktop.Host
                 {
                     _encoder.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_END_OF_STREAM, IntPtr.Zero);
                     _encoder.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_END_STREAMING, IntPtr.Zero);
+                }
+                if (_converterStreaming && _colorConverter != null)
+                {
+                    _colorConverter.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_END_OF_STREAM, IntPtr.Zero);
+                    _colorConverter.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_END_STREAMING, IntPtr.Zero);
                 }
             }
             catch
@@ -107,10 +197,30 @@ namespace ExtentDesktop.Host
                 Marshal.ReleaseComObject(_outputSample);
                 _outputSample = null;
             }
+            if (_nv12Sample != null)
+            {
+                Marshal.ReleaseComObject(_nv12Sample);
+                _nv12Sample = null;
+            }
             if (_inputBuffer != null)
             {
                 Marshal.ReleaseComObject(_inputBuffer);
                 _inputBuffer = null;
+            }
+            if (_bgraSample != null)
+            {
+                Marshal.ReleaseComObject(_bgraSample);
+                _bgraSample = null;
+            }
+            if (_bgraBuffer != null)
+            {
+                Marshal.ReleaseComObject(_bgraBuffer);
+                _bgraBuffer = null;
+            }
+            if (_colorConverter != null)
+            {
+                Marshal.ReleaseComObject(_colorConverter);
+                _colorConverter = null;
             }
             if (_encoder != null)
             {
@@ -118,6 +228,7 @@ namespace ExtentDesktop.Host
                 _encoder = null;
             }
             _streaming = false;
+            _converterStreaming = false;
         }
 
         private void CreateEncoder(int bitrate)
@@ -136,6 +247,47 @@ namespace ExtentDesktop.Host
             ConfigureLowLatencyAttribute();
             SetOutputTypeWithFallbacks(bitrate);
             SetInputTypeFromAvailable();
+        }
+
+        private void CreateColorConverter()
+        {
+            MFHelpers.Log("=== H264Encoder.CreateColorConverter begin ===");
+
+            var clsid = MFGuids.CLSID_CColorConvertDMO;
+            var iid = new Guid("bf94c121-5b05-4e6f-8000-ba598961414d");
+            object converterObj;
+            int hr = MFNative.CoCreateInstance(ref clsid, IntPtr.Zero, MFConstants.CLSCTX_INPROC_SERVER, ref iid, out converterObj);
+            MFHelpers.LogHr("CoCreateInstance(ColorConvert)", hr);
+            MFHelpers.Check(hr, "CoCreateInstance(ColorConvert)");
+            _colorConverter = (IMFTransform)converterObj;
+
+            // Set input type RGB32 first (some converters require input first)
+            var inputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_RGB32, _width, _height, _fps, 1);
+            try
+            {
+                var strideKey = MFGuids.MF_MT_DEFAULT_STRIDE;
+                inputType.SetUINT32(ref strideKey, (uint)(_width * 4));
+
+                int inputHr = _colorConverter.SetInputType(0, inputType, 0);
+                MFHelpers.LogHr("ColorConvert SetInputType(RGB32)", inputHr);
+                MFHelpers.Check(inputHr, "ColorConvert SetInputType(RGB32)");
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(inputType);
+            }
+
+            var outputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_NV12, _width, _height, _fps, 1);
+            try
+            {
+                int outputHr = _colorConverter.SetOutputType(0, outputType, 0);
+                MFHelpers.LogHr("ColorConvert SetOutputType(NV12)", outputHr);
+                MFHelpers.Check(outputHr, "ColorConvert SetOutputType(NV12)");
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(outputType);
+            }
         }
 
         private void SetInputTypeFromAvailable()
@@ -425,7 +577,16 @@ namespace ExtentDesktop.Host
         {
             int nv12Size = PixelConvert.Nv12Size(_width, _height);
             _inputBufferCapacity = nv12Size;
-            MFHelpers.Check(MFNative.MFCreateMemoryBuffer(nv12Size, out _inputBuffer), "MFCreateMemoryBuffer(input)");
+            MFHelpers.Check(MFNative.MFCreateMemoryBuffer(nv12Size, out _inputBuffer), "MFCreateMemoryBuffer(input/nv12)");
+
+            _bgraBufferCapacity = _width * 4 * _height;
+            MFHelpers.Check(MFNative.MFCreateMemoryBuffer(_bgraBufferCapacity, out _bgraBuffer), "MFCreateMemoryBuffer(bgra)");
+
+            MFHelpers.Check(MFNative.MFCreateSample(out _bgraSample), "MFCreateSample(bgra)");
+            MFHelpers.Check(_bgraSample.AddBuffer(_bgraBuffer), "BGRA AddBuffer");
+
+            MFHelpers.Check(MFNative.MFCreateSample(out _nv12Sample), "MFCreateSample(nv12)");
+            MFHelpers.Check(_nv12Sample.AddBuffer(_inputBuffer), "NV12 AddBuffer");
 
             MFT_OUTPUT_STREAM_INFO info;
             MFHelpers.Check(_encoder.GetOutputStreamInfo(0, out info), "GetOutputStreamInfo");
@@ -453,6 +614,16 @@ namespace ExtentDesktop.Host
 
         private void StartStreaming()
         {
+            int convHr = _colorConverter.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, IntPtr.Zero);
+            MFHelpers.LogHr("ColorConvert BEGIN_STREAMING", convHr);
+            MFHelpers.Check(convHr, "ColorConvert BEGIN_STREAMING");
+
+            convHr = _colorConverter.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_START_OF_STREAM, IntPtr.Zero);
+            MFHelpers.LogHr("ColorConvert START_OF_STREAM", convHr);
+            MFHelpers.Check(convHr, "ColorConvert START_OF_STREAM");
+
+            _converterStreaming = true;
+
             int hr = _encoder.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, IntPtr.Zero);
             MFHelpers.LogHr("BEGIN_STREAMING", hr);
             MFHelpers.Check(hr, "BEGIN_STREAMING");
@@ -462,31 +633,7 @@ namespace ExtentDesktop.Host
             MFHelpers.Check(hr, "START_OF_STREAM");
 
             _streaming = true;
-            MFHelpers.Log("=== H264Encoder ready ===");
-        }
-
-        private void FillInputSample(IntPtr bgraData, int bgraStride, out IMFSample sample)
-        {
-            IntPtr p;
-            int maxLen, curLen;
-            MFHelpers.Check(_inputBuffer.Lock(out p, out maxLen, out curLen), "InputBuffer.Lock");
-            try
-            {
-                PixelConvert.Bgra32ToNv12(bgraData, bgraStride, p, _width, _height);
-            }
-            finally
-            {
-                MFHelpers.Check(_inputBuffer.Unlock(), "InputBuffer.Unlock");
-            }
-            MFHelpers.Check(_inputBuffer.SetCurrentLength(_inputBufferCapacity), "InputBuffer.SetCurrentLength");
-
-            MFHelpers.Check(MFNative.MFCreateSample(out sample), "MFCreateSample(input)");
-            MFHelpers.Check(sample.AddBuffer(_inputBuffer), "Input AddBuffer");
-
-            long pts = _frameIndex * _frameDurationTicks;
-            MFHelpers.Check(sample.SetSampleTime(pts), "SetSampleTime");
-            MFHelpers.Check(sample.SetSampleDuration(_frameDurationTicks), "SetSampleDuration");
-            _frameIndex++;
+            MFHelpers.Log("=== H264Encoder ready (with ColorConvert) ===");
         }
 
         private bool DrainOutput(out byte[] buffer, out int length, out bool isKeyframe)

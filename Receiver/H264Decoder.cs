@@ -12,14 +12,19 @@ namespace ExtentDesktop.Receiver
         private readonly int _expectedHeight;
         private readonly FrameBitmapPool _bitmapPool;
         private IMFTransform _decoder;
+        private IMFTransform _colorConverter;
         private IMFMediaBuffer _outputBuffer;
         private IMFSample _outputSample;
+        private IMFMediaBuffer _bgraBuffer;
+        private IMFSample _bgraSample;
         private bool _encoderProvidesOutputSamples;
         private bool _outputTypeSet;
+        private bool _converterReady;
         private int _frameWidth;
         private int _frameHeight;
         private int _frameStride;
         private bool _streaming;
+        private bool _converterStreaming;
 
         public H264Decoder(int expectedWidth, int expectedHeight, FrameBitmapPool bitmapPool)
         {
@@ -99,6 +104,11 @@ namespace ExtentDesktop.Receiver
                     _decoder.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_END_OF_STREAM, IntPtr.Zero);
                     _decoder.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_END_STREAMING, IntPtr.Zero);
                 }
+                if (_converterStreaming && _colorConverter != null)
+                {
+                    _colorConverter.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_END_OF_STREAM, IntPtr.Zero);
+                    _colorConverter.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_END_STREAMING, IntPtr.Zero);
+                }
             }
             catch
             {
@@ -127,12 +137,29 @@ namespace ExtentDesktop.Receiver
                 Marshal.ReleaseComObject(_outputSample);
                 _outputSample = null;
             }
+            if (_bgraSample != null)
+            {
+                Marshal.ReleaseComObject(_bgraSample);
+                _bgraSample = null;
+            }
+            if (_bgraBuffer != null)
+            {
+                Marshal.ReleaseComObject(_bgraBuffer);
+                _bgraBuffer = null;
+            }
+            if (_colorConverter != null)
+            {
+                Marshal.ReleaseComObject(_colorConverter);
+                _colorConverter = null;
+            }
             if (_decoder != null)
             {
                 Marshal.ReleaseComObject(_decoder);
                 _decoder = null;
             }
             _streaming = false;
+            _converterStreaming = false;
+            _converterReady = false;
         }
 
         private void CreateDecoder()
@@ -382,40 +409,132 @@ namespace ExtentDesktop.Receiver
 
             int width = _frameWidth > 0 ? _frameWidth : _expectedWidth;
             int height = _frameHeight > 0 ? _frameHeight : _expectedHeight;
-            int stride = _frameStride > 0 ? _frameStride : width;
 
-            IMFMediaBuffer mediaBuffer;
-            MFHelpers.Check(sample.ConvertToContiguousBuffer(out mediaBuffer), "ConvertToContiguousBuffer");
+            EnsureColorConverter(width, height);
+
+            int hr = _colorConverter.ProcessInput(0, sample, 0);
+            MFHelpers.Check(hr, "ColorConvert ProcessInput");
+
+            int bgraSize = width * 4 * height;
+            MFHelpers.Check(_bgraBuffer.SetCurrentLength(0), "BgraBuffer.SetCurrentLength(0)");
+
+            var outputs = new MFT_OUTPUT_DATA_BUFFER[1];
+            outputs[0].dwStreamID = 0;
+            outputs[0].pSample = _bgraSample;
+            outputs[0].dwStatus = 0;
+            outputs[0].pEvents = null;
+
+            uint status;
+            int outHr = _colorConverter.ProcessOutput(0, 1, outputs, out status);
+            if (outHr == MFConstants.MF_E_TRANSFORM_STREAM_CHANGE)
+            {
+                IMFMediaType newType;
+                if (_colorConverter.GetOutputAvailableType(0, 0, out newType) == 0)
+                {
+                    try { _colorConverter.SetOutputType(0, newType, 0); }
+                    finally { Marshal.ReleaseComObject(newType); }
+                }
+                outHr = _colorConverter.ProcessOutput(0, 1, outputs, out status);
+            }
+            MFHelpers.Check(outHr, "ColorConvert ProcessOutput");
+
+            IntPtr bgraPtr;
+            int bgraMaxLen, bgraCurLen;
+            MFHelpers.Check(_bgraBuffer.Lock(out bgraPtr, out bgraMaxLen, out bgraCurLen), "BgraBuffer.Lock");
             try
             {
-                IntPtr p;
-                int maxLen, curLen;
-                MFHelpers.Check(mediaBuffer.Lock(out p, out maxLen, out curLen), "OutputBuffer.Lock");
+                var bitmap = _bitmapPool != null ? _bitmapPool.Take(width, height) : new Bitmap(width, height, PixelFormat.Format32bppRgb);
+                if (_bitmapPool != null) bitmap.Tag = _bitmapPool;
+                var rect = new Rectangle(0, 0, width, height);
+                var bits = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
                 try
                 {
-                    var bitmap = _bitmapPool != null ? _bitmapPool.Take(width, height) : new Bitmap(width, height, PixelFormat.Format32bppRgb);
-                    if (_bitmapPool != null) bitmap.Tag = _bitmapPool;
-                    var rect = new Rectangle(0, 0, width, height);
-                    var bits = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
-                    try
+                    int srcStride = width * 4;
+                    if (bits.Stride == srcStride)
                     {
-                        PixelConvert.Nv12ToBgra32(p, stride, bits.Scan0, bits.Stride, width, height);
+                        RtlMoveMemory(bits.Scan0, bgraPtr, (UIntPtr)bgraSize);
                     }
-                    finally
+                    else
                     {
-                        bitmap.UnlockBits(bits);
+                        for (int y = 0; y < height; y++)
+                        {
+                            RtlMoveMemory(IntPtr.Add(bits.Scan0, y * bits.Stride), IntPtr.Add(bgraPtr, y * srcStride), (UIntPtr)srcStride);
+                        }
                     }
-                    return bitmap;
                 }
                 finally
                 {
-                    MFHelpers.Check(mediaBuffer.Unlock(), "OutputBuffer.Unlock");
+                    bitmap.UnlockBits(bits);
                 }
+                return bitmap;
             }
             finally
             {
-                Marshal.ReleaseComObject(mediaBuffer);
+                MFHelpers.Check(_bgraBuffer.Unlock(), "BgraBuffer.Unlock");
             }
         }
+
+        private void EnsureColorConverter(int width, int height)
+        {
+            if (_converterReady) return;
+
+            MFHelpers.Log("=== H264Decoder.CreateColorConverter " + width + "x" + height + " ===");
+
+            var clsid = MFGuids.CLSID_CColorConvertDMO;
+            var iid = new Guid("bf94c121-5b05-4e6f-8000-ba598961414d");
+            object converterObj;
+            int hr = MFNative.CoCreateInstance(ref clsid, IntPtr.Zero, MFConstants.CLSCTX_INPROC_SERVER, ref iid, out converterObj);
+            MFHelpers.LogHr("CoCreateInstance(ColorConvert)", hr);
+            MFHelpers.Check(hr, "CoCreateInstance(ColorConvert)");
+            _colorConverter = (IMFTransform)converterObj;
+
+            int fps = 60;
+            var inputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_NV12, width, height, fps, 1);
+            try
+            {
+                int inHr = _colorConverter.SetInputType(0, inputType, 0);
+                MFHelpers.LogHr("ColorConvert SetInputType(NV12)", inHr);
+                MFHelpers.Check(inHr, "ColorConvert SetInputType(NV12)");
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(inputType);
+            }
+
+            var outputType = MFHelpers.CreateVideoType(MFGuids.MFVideoFormat_RGB32, width, height, fps, 1);
+            try
+            {
+                var strideKey = MFGuids.MF_MT_DEFAULT_STRIDE;
+                outputType.SetUINT32(ref strideKey, (uint)(width * 4));
+
+                int outHr = _colorConverter.SetOutputType(0, outputType, 0);
+                MFHelpers.LogHr("ColorConvert SetOutputType(RGB32)", outHr);
+                MFHelpers.Check(outHr, "ColorConvert SetOutputType(RGB32)");
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(outputType);
+            }
+
+            int bgraSize = width * 4 * height;
+            MFHelpers.Check(MFNative.MFCreateMemoryBuffer(bgraSize, out _bgraBuffer), "MFCreateMemoryBuffer(bgra)");
+            MFHelpers.Check(MFNative.MFCreateSample(out _bgraSample), "MFCreateSample(bgra)");
+            MFHelpers.Check(_bgraSample.AddBuffer(_bgraBuffer), "BGRA AddBuffer");
+
+            int beginHr = _colorConverter.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, IntPtr.Zero);
+            MFHelpers.LogHr("ColorConvert BEGIN_STREAMING", beginHr);
+            MFHelpers.Check(beginHr, "ColorConvert BEGIN_STREAMING");
+
+            int startHr = _colorConverter.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_START_OF_STREAM, IntPtr.Zero);
+            MFHelpers.LogHr("ColorConvert START_OF_STREAM", startHr);
+            MFHelpers.Check(startHr, "ColorConvert START_OF_STREAM");
+
+            _converterStreaming = true;
+            _converterReady = true;
+            MFHelpers.Log("=== H264Decoder.ColorConverter ready ===");
+        }
+
+        [DllImport("kernel32.dll", EntryPoint = "RtlMoveMemory", SetLastError = false)]
+        private static extern void RtlMoveMemory(IntPtr dest, IntPtr src, UIntPtr count);
     }
 }
