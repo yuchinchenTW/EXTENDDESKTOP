@@ -102,6 +102,8 @@ namespace ExtentDesktop.Receiver
 
         internal long LastProcessOutputTicks;
         internal long LastConvertTicks;
+        internal long AccumulatedProcessOutputTicks;
+        internal long AccumulatedConvertTicks;
 
         public bool TryDrainBitmap(out Bitmap bitmap)
         {
@@ -372,7 +374,9 @@ namespace ExtentDesktop.Receiver
                 uint status;
                 long tBefore = System.Diagnostics.Stopwatch.GetTimestamp();
                 int hr = _decoder.ProcessOutput(0, 1, outputs, out status);
-                LastProcessOutputTicks = System.Diagnostics.Stopwatch.GetTimestamp() - tBefore;
+                long elapsed = System.Diagnostics.Stopwatch.GetTimestamp() - tBefore;
+                LastProcessOutputTicks = elapsed;
+                AccumulatedProcessOutputTicks += elapsed;
 
                 if (hr == MFConstants.MF_E_TRANSFORM_NEED_MORE_INPUT)
                 {
@@ -398,7 +402,9 @@ namespace ExtentDesktop.Receiver
                 {
                     long tConv = System.Diagnostics.Stopwatch.GetTimestamp();
                     bitmap = ConvertSampleToBitmap(sample);
-                    LastConvertTicks = System.Diagnostics.Stopwatch.GetTimestamp() - tConv;
+                    long convElapsed = System.Diagnostics.Stopwatch.GetTimestamp() - tConv;
+                    LastConvertTicks = convElapsed;
+                    AccumulatedConvertTicks += convElapsed;
                 }
                 finally
                 {

@@ -190,9 +190,13 @@ namespace ExtentDesktop.Receiver
                     _latestFrame.ReturnBuffer(frame.PayloadBuffer);
                     long tSubmit = sw.ElapsedTicks;
 
+                    _decoder.AccumulatedProcessOutputTicks = 0;
+                    _decoder.AccumulatedConvertTicks = 0;
+                    int drainIters = 0;
                     Bitmap decoded;
                     while (_decoder.TryDrainBitmap(out decoded))
                     {
+                        drainIters++;
                         if (decoded != null)
                         {
                             _frameCallback(decoded, frame.Width, frame.Height);
@@ -205,9 +209,9 @@ namespace ExtentDesktop.Receiver
                     {
                         long subMs = (tSubmit - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
                         long drainMs = (tDrain - tSubmit) * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                        long procMs = _decoder.LastProcessOutputTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                        long convMs = _decoder.LastConvertTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs + " procOut=" + procMs + " convert=" + convMs);
+                        long procMs = _decoder.AccumulatedProcessOutputTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                        long convMs = _decoder.AccumulatedConvertTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs + " iters=" + drainIters + " procOutSum=" + procMs + " convSum=" + convMs);
                     }
                 }
                 catch (Exception ex)
