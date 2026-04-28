@@ -25,6 +25,9 @@ namespace ExtentDesktop.Receiver
         private int _frameStride;
         private bool _streaming;
         private bool _converterStreaming;
+        private IMFMediaBuffer _persistentInputBuffer;
+        private IMFSample _persistentInputSample;
+        private int _persistentInputCapacity;
 
         public H264Decoder(int expectedWidth, int expectedHeight, FrameBitmapPool bitmapPool)
         {
@@ -49,45 +52,52 @@ namespace ExtentDesktop.Receiver
 
         public void Submit(byte[] data, int length)
         {
-            IMFSample input;
-            IMFMediaBuffer inBuffer;
-            MFHelpers.Check(MFNative.MFCreateMemoryBuffer(length, out inBuffer), "MFCreateMemoryBuffer(input)");
+            EnsureInputBuffer(length);
+
+            IntPtr p;
+            int maxLen, curLen;
+            MFHelpers.Check(_persistentInputBuffer.Lock(out p, out maxLen, out curLen), "InputBuffer.Lock");
             try
             {
-                IntPtr p;
-                int maxLen, curLen;
-                MFHelpers.Check(inBuffer.Lock(out p, out maxLen, out curLen), "InputBuffer.Lock");
-                try
-                {
-                    Marshal.Copy(data, 0, p, length);
-                }
-                finally
-                {
-                    MFHelpers.Check(inBuffer.Unlock(), "InputBuffer.Unlock");
-                }
-                MFHelpers.Check(inBuffer.SetCurrentLength(length), "InputBuffer.SetCurrentLength");
-
-                MFHelpers.Check(MFNative.MFCreateSample(out input), "MFCreateSample(input)");
-                try
-                {
-                    MFHelpers.Check(input.AddBuffer(inBuffer), "Input AddBuffer");
-
-                    int hr = _decoder.ProcessInput(0, input, 0);
-                    if (hr == MFConstants.MF_E_TRANSFORM_STREAM_CHANGE || hr == MFConstants.MF_E_INVALIDMEDIATYPE)
-                    {
-                        return;
-                    }
-                    MFHelpers.Check(hr, "ProcessInput");
-                }
-                finally
-                {
-                    Marshal.ReleaseComObject(input);
-                }
+                Marshal.Copy(data, 0, p, length);
             }
             finally
             {
-                Marshal.ReleaseComObject(inBuffer);
+                MFHelpers.Check(_persistentInputBuffer.Unlock(), "InputBuffer.Unlock");
             }
+            MFHelpers.Check(_persistentInputBuffer.SetCurrentLength(length), "InputBuffer.SetCurrentLength");
+
+            int hr = _decoder.ProcessInput(0, _persistentInputSample, 0);
+            if (hr == MFConstants.MF_E_TRANSFORM_STREAM_CHANGE || hr == MFConstants.MF_E_INVALIDMEDIATYPE)
+            {
+                return;
+            }
+            MFHelpers.Check(hr, "ProcessInput");
+        }
+
+        private void EnsureInputBuffer(int length)
+        {
+            if (_persistentInputBuffer != null && length <= _persistentInputCapacity)
+            {
+                return;
+            }
+
+            if (_persistentInputSample != null)
+            {
+                Marshal.ReleaseComObject(_persistentInputSample);
+                _persistentInputSample = null;
+            }
+            if (_persistentInputBuffer != null)
+            {
+                Marshal.ReleaseComObject(_persistentInputBuffer);
+                _persistentInputBuffer = null;
+            }
+
+            int capacity = Math.Max(length, 1024 * 1024);
+            MFHelpers.Check(MFNative.MFCreateMemoryBuffer(capacity, out _persistentInputBuffer), "MFCreateMemoryBuffer(persistent input)");
+            MFHelpers.Check(MFNative.MFCreateSample(out _persistentInputSample), "MFCreateSample(persistent input)");
+            MFHelpers.Check(_persistentInputSample.AddBuffer(_persistentInputBuffer), "Persistent input AddBuffer");
+            _persistentInputCapacity = capacity;
         }
 
         public bool TryDrainBitmap(out Bitmap bitmap)
@@ -151,6 +161,16 @@ namespace ExtentDesktop.Receiver
             {
                 Marshal.ReleaseComObject(_colorConverter);
                 _colorConverter = null;
+            }
+            if (_persistentInputSample != null)
+            {
+                Marshal.ReleaseComObject(_persistentInputSample);
+                _persistentInputSample = null;
+            }
+            if (_persistentInputBuffer != null)
+            {
+                Marshal.ReleaseComObject(_persistentInputBuffer);
+                _persistentInputBuffer = null;
             }
             if (_decoder != null)
             {
