@@ -165,7 +165,14 @@ namespace ExtentDesktop.Receiver
         [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool GetThreadTimes(IntPtr hThread, out long creation, out long exit, out long kernel, out long user);
 
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetProcessTimes(IntPtr hProcess, out long creation, out long exit, out long kernel, out long user);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
         private long _lastCpuTicks;
+        private long _lastProcCpuTicks;
 
         private long GetThreadCpuMs()
         {
@@ -177,6 +184,19 @@ namespace ExtentDesktop.Receiver
             long total = k + u;
             long delta = total - _lastCpuTicks;
             _lastCpuTicks = total;
+            return delta / 10000L;
+        }
+
+        private long GetProcessCpuMs()
+        {
+            long c, e, k, u;
+            if (!GetProcessTimes(GetCurrentProcess(), out c, out e, out k, out u))
+            {
+                return -1;
+            }
+            long total = k + u;
+            long delta = total - _lastProcCpuTicks;
+            _lastProcCpuTicks = total;
             return delta / 10000L;
         }
 
@@ -193,6 +213,7 @@ namespace ExtentDesktop.Receiver
                 }
 
                 GetThreadCpuMs();
+                GetProcessCpuMs();
                 long t0 = sw.ElapsedTicks;
 
                 try
@@ -237,7 +258,8 @@ namespace ExtentDesktop.Receiver
                         long procMs = _decoder.AccumulatedProcessOutputTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
                         long convMs = _decoder.AccumulatedConvertTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
                         long cpuMs = GetThreadCpuMs();
-                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs + " iters=" + drainIters + " procOutSum=" + procMs + " convSum=" + convMs + " cpuDelta=" + cpuMs);
+                        long procMsCpu = GetProcessCpuMs();
+                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs + " iters=" + drainIters + " procOutSum=" + procMs + " convSum=" + convMs + " thrCpu=" + cpuMs + " procCpu=" + procMsCpu);
                     }
                 }
                 catch (Exception ex)
