@@ -124,26 +124,24 @@ namespace ExtentDesktop.Receiver
 
         private void ReceiveLoop()
         {
+            byte[] receiveBuffer = null;
             try
             {
                 var stream = _client.GetStream();
 
                 while (_running)
                 {
-                    var message = Protocol.ReceiveMessage(stream);
-                    if (message.Type != MessageType.Frame)
+                    int totalLen = Protocol.ReceiveMessageInto(stream, ref receiveBuffer);
+                    var msgType = (MessageType)receiveBuffer[0];
+                    if (msgType != MessageType.Frame)
                     {
                         continue;
                     }
 
-                    using (var reader = Protocol.CreateReader(message.Payload))
-                    {
-                        var width = reader.ReadInt32();
-                        var height = reader.ReadInt32();
-                        var imageLength = reader.ReadInt32();
-                        var imageBytes = reader.ReadBytes(imageLength);
-                        _latestFrame.Update(width, height, imageBytes);
-                    }
+                    int width = BitConverter.ToInt32(receiveBuffer, 1);
+                    int height = BitConverter.ToInt32(receiveBuffer, 5);
+                    int imageLength = BitConverter.ToInt32(receiveBuffer, 9);
+                    _latestFrame.Update(width, height, receiveBuffer, 13, imageLength);
                 }
             }
             catch (Exception ex)
@@ -185,7 +183,9 @@ namespace ExtentDesktop.Receiver
                         }
                     }
 
-                    _decoder.Submit(frame.JpegBytes, frame.JpegBytes.Length);
+                    _decoder.Submit(frame.PayloadBuffer, frame.PayloadLength);
+                    _latestFrame.ReturnBuffer(frame.PayloadBuffer);
+
                     Bitmap decoded;
                     while (_decoder.TryDrainBitmap(out decoded))
                     {
@@ -205,34 +205,67 @@ namespace ExtentDesktop.Receiver
         {
             public int Width;
             public int Height;
-            public byte[] JpegBytes;
+            public byte[] PayloadBuffer;
+            public int PayloadLength;
         }
 
         private sealed class LatestFrameStore
         {
             private readonly object _sync = new object();
             private readonly System.Collections.Generic.Queue<FrameData> _queue = new System.Collections.Generic.Queue<FrameData>();
+            private readonly System.Collections.Generic.Stack<byte[]> _bufferPool = new System.Collections.Generic.Stack<byte[]>();
+            private readonly System.Collections.Generic.Stack<FrameData> _frameDataPool = new System.Collections.Generic.Stack<FrameData>();
             private readonly AutoResetEvent _available = new AutoResetEvent(false);
             private readonly AutoResetEvent _slotFreed = new AutoResetEvent(false);
             private const int MaxDepth = 1;
+            private const int BufferPoolCapacity = 4;
             private volatile bool _completed;
 
-            public void Update(int width, int height, byte[] jpegBytes)
+            public void Update(int width, int height, byte[] source, int offset, int length)
             {
                 while (!_completed)
                 {
+                    byte[] poolBuf;
+                    lock (_sync)
+                    {
+                        poolBuf = _bufferPool.Count > 0 ? _bufferPool.Pop() : null;
+                    }
+
+                    if (poolBuf == null || poolBuf.Length < length)
+                    {
+                        poolBuf = new byte[Math.Max(length, 256 * 1024)];
+                    }
+
+                    Buffer.BlockCopy(source, offset, poolBuf, 0, length);
+
                     lock (_sync)
                     {
                         if (_queue.Count < MaxDepth)
                         {
-                            _queue.Enqueue(new FrameData
+                            FrameData frame;
+                            if (_frameDataPool.Count > 0)
                             {
-                                Width = width,
-                                Height = height,
-                                JpegBytes = jpegBytes
-                            });
+                                frame = _frameDataPool.Pop();
+                            }
+                            else
+                            {
+                                frame = new FrameData();
+                            }
+                            frame.Width = width;
+                            frame.Height = height;
+                            frame.PayloadBuffer = poolBuf;
+                            frame.PayloadLength = length;
+                            _queue.Enqueue(frame);
                             _available.Set();
                             return;
+                        }
+                        else
+                        {
+                            // queue full, return our buffer back to pool then wait
+                            if (_bufferPool.Count < BufferPoolCapacity)
+                            {
+                                _bufferPool.Push(poolBuf);
+                            }
                         }
                     }
                     _slotFreed.WaitOne(50);
@@ -261,6 +294,18 @@ namespace ExtentDesktop.Receiver
                     }
 
                     _available.WaitOne();
+                }
+            }
+
+            public void ReturnBuffer(byte[] buffer)
+            {
+                if (buffer == null) return;
+                lock (_sync)
+                {
+                    if (_bufferPool.Count < BufferPoolCapacity)
+                    {
+                        _bufferPool.Push(buffer);
+                    }
                 }
             }
 
