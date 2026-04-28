@@ -159,6 +159,7 @@ namespace ExtentDesktop.Receiver
 
         private void DecodeLoop()
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             while (_running)
             {
                 FrameData frame;
@@ -166,6 +167,8 @@ namespace ExtentDesktop.Receiver
                 {
                     return;
                 }
+
+                long t0 = sw.ElapsedTicks;
 
                 try
                 {
@@ -185,6 +188,7 @@ namespace ExtentDesktop.Receiver
 
                     _decoder.Submit(frame.PayloadBuffer, frame.PayloadLength);
                     _latestFrame.ReturnBuffer(frame.PayloadBuffer);
+                    long tSubmit = sw.ElapsedTicks;
 
                     Bitmap decoded;
                     while (_decoder.TryDrainBitmap(out decoded))
@@ -194,9 +198,19 @@ namespace ExtentDesktop.Receiver
                             _frameCallback(decoded, frame.Width, frame.Height);
                         }
                     }
+                    long tDrain = sw.ElapsedTicks;
+
+                    long totalMs = (tDrain - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                    if (totalMs > 50)
+                    {
+                        long subMs = (tSubmit - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                        long drainMs = (tDrain - tSubmit) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs);
+                    }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    ExtentDesktop.Shared.MFHelpers.Log("decode exception: " + ex.GetType().Name + ": " + ex.Message);
                 }
             }
         }
