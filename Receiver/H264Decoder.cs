@@ -30,6 +30,7 @@ namespace ExtentDesktop.Receiver
         private int _persistentInputCapacity;
         private IMFDXGIDeviceManager _dxgiManager;
         private object _d3dDevice;
+        private bool _converterProvidesSamples;
 
         public H264Decoder(int expectedWidth, int expectedHeight, FrameBitmapPool bitmapPool)
         {
@@ -545,14 +546,21 @@ namespace ExtentDesktop.Receiver
             int hr = _colorConverter.ProcessInput(0, sample, 0);
             MFHelpers.Check(hr, "ColorConvert ProcessInput");
 
-            int bgraSize = width * 4 * height;
-            MFHelpers.Check(_bgraBuffer.SetCurrentLength(0), "BgraBuffer.SetCurrentLength(0)");
-
             var outputs = new MFT_OUTPUT_DATA_BUFFER[1];
             outputs[0].dwStreamID = 0;
-            outputs[0].pSample = _bgraSample;
             outputs[0].dwStatus = 0;
             outputs[0].pEvents = null;
+
+            int srcStride = width * 4;
+            if (_converterProvidesSamples)
+            {
+                outputs[0].pSample = null;
+            }
+            else
+            {
+                MFHelpers.Check(_bgraBuffer.SetCurrentLength(0), "BgraBuffer.SetCurrentLength(0)");
+                outputs[0].pSample = _bgraSample;
+            }
 
             uint status;
             int outHr = _colorConverter.ProcessOutput(0, 1, outputs, out status);
@@ -568,39 +576,65 @@ namespace ExtentDesktop.Receiver
             }
             MFHelpers.Check(outHr, "ColorConvert ProcessOutput");
 
-            IntPtr bgraPtr;
-            int bgraMaxLen, bgraCurLen;
-            MFHelpers.Check(_bgraBuffer.Lock(out bgraPtr, out bgraMaxLen, out bgraCurLen), "BgraBuffer.Lock");
+            IMFSample outSample = outputs[0].pSample;
+            if (outSample == null)
+            {
+                return null;
+            }
+
+            IMFMediaBuffer outBuffer;
             try
             {
-                var bitmap = _bitmapPool != null ? _bitmapPool.Take(width, height) : new Bitmap(width, height, PixelFormat.Format32bppRgb);
-                if (_bitmapPool != null) bitmap.Tag = _bitmapPool;
-                var rect = new Rectangle(0, 0, width, height);
-                var bits = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
-                try
-                {
-                    int srcStride = width * 4;
-                    if (bits.Stride == srcStride)
-                    {
-                        RtlMoveMemory(bits.Scan0, bgraPtr, (UIntPtr)bgraSize);
-                    }
-                    else
-                    {
-                        for (int y = 0; y < height; y++)
-                        {
-                            RtlMoveMemory(IntPtr.Add(bits.Scan0, y * bits.Stride), IntPtr.Add(bgraPtr, y * srcStride), (UIntPtr)srcStride);
-                        }
-                    }
-                }
-                finally
-                {
-                    bitmap.UnlockBits(bits);
-                }
-                return bitmap;
+                MFHelpers.Check(outSample.ConvertToContiguousBuffer(out outBuffer), "Out.ConvertToContiguousBuffer");
             }
             finally
             {
-                MFHelpers.Check(_bgraBuffer.Unlock(), "BgraBuffer.Unlock");
+                if (_converterProvidesSamples)
+                {
+                    Marshal.ReleaseComObject(outSample);
+                }
+            }
+
+            try
+            {
+                IntPtr bgraPtr;
+                int bgraMaxLen, bgraCurLen;
+                MFHelpers.Check(outBuffer.Lock(out bgraPtr, out bgraMaxLen, out bgraCurLen), "Out.Lock");
+                try
+                {
+                    var bitmap = _bitmapPool != null ? _bitmapPool.Take(width, height) : new Bitmap(width, height, PixelFormat.Format32bppRgb);
+                    if (_bitmapPool != null) bitmap.Tag = _bitmapPool;
+                    var rect = new Rectangle(0, 0, width, height);
+                    var bits = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
+                    try
+                    {
+                        int rowBytes = srcStride;
+                        if (bits.Stride == rowBytes)
+                        {
+                            RtlMoveMemory(bits.Scan0, bgraPtr, (UIntPtr)(rowBytes * height));
+                        }
+                        else
+                        {
+                            for (int y = 0; y < height; y++)
+                            {
+                                RtlMoveMemory(IntPtr.Add(bits.Scan0, y * bits.Stride), IntPtr.Add(bgraPtr, y * rowBytes), (UIntPtr)rowBytes);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        bitmap.UnlockBits(bits);
+                    }
+                    return bitmap;
+                }
+                finally
+                {
+                    MFHelpers.Check(outBuffer.Unlock(), "Out.Unlock");
+                }
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(outBuffer);
             }
         }
 
@@ -654,6 +688,14 @@ namespace ExtentDesktop.Receiver
             MFHelpers.Check(MFNative.MFCreateMemoryBuffer(bgraSize, out _bgraBuffer), "MFCreateMemoryBuffer(bgra)");
             MFHelpers.Check(MFNative.MFCreateSample(out _bgraSample), "MFCreateSample(bgra)");
             MFHelpers.Check(_bgraSample.AddBuffer(_bgraBuffer), "BGRA AddBuffer");
+
+            MFT_OUTPUT_STREAM_INFO convInfo;
+            int infoHr = _colorConverter.GetOutputStreamInfo(0, out convInfo);
+            if (infoHr == 0)
+            {
+                _converterProvidesSamples = (convInfo.dwFlags & (MFConstants.MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFConstants.MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) != 0;
+                MFHelpers.Log("Converter ProvidesSamples=" + _converterProvidesSamples + " (flags=0x" + convInfo.dwFlags.ToString("X") + ")");
+            }
 
             int beginHr = _colorConverter.ProcessMessage(MFConstants.MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, IntPtr.Zero);
             MFHelpers.LogHr("ColorConvert BEGIN_STREAMING", beginHr);
