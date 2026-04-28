@@ -18,6 +18,22 @@ namespace ExtentDesktop.Host
             timeBeginPeriod(1);
             try
             {
+                try
+                {
+                    System.Diagnostics.Process.GetCurrentProcess().PriorityClass = System.Diagnostics.ProcessPriorityClass.AboveNormal;
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.LowLatency;
+                }
+                catch
+                {
+                }
+
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new HostForm());
