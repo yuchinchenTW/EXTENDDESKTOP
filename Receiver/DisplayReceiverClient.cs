@@ -159,9 +159,31 @@ namespace ExtentDesktop.Receiver
             }
         }
 
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentThread();
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetThreadTimes(IntPtr hThread, out long creation, out long exit, out long kernel, out long user);
+
+        private long _lastCpuTicks;
+
+        private long GetThreadCpuMs()
+        {
+            long c, e, k, u;
+            if (!GetThreadTimes(GetCurrentThread(), out c, out e, out k, out u))
+            {
+                return -1;
+            }
+            long total = k + u;
+            long delta = total - _lastCpuTicks;
+            _lastCpuTicks = total;
+            return delta / 10000L;
+        }
+
         private void DecodeLoop()
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            GetThreadCpuMs();
             while (_running)
             {
                 FrameData frame;
@@ -170,6 +192,7 @@ namespace ExtentDesktop.Receiver
                     return;
                 }
 
+                GetThreadCpuMs();
                 long t0 = sw.ElapsedTicks;
 
                 try
@@ -213,7 +236,8 @@ namespace ExtentDesktop.Receiver
                         long drainMs = (tDrain - tSubmit) * 1000L / System.Diagnostics.Stopwatch.Frequency;
                         long procMs = _decoder.AccumulatedProcessOutputTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
                         long convMs = _decoder.AccumulatedConvertTicks * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs + " iters=" + drainIters + " procOutSum=" + procMs + " convSum=" + convMs);
+                        long cpuMs = GetThreadCpuMs();
+                        ExtentDesktop.Shared.MFHelpers.Log("SLOW decode total=" + totalMs + "ms submit=" + subMs + " drain=" + drainMs + " iters=" + drainIters + " procOutSum=" + procMs + " convSum=" + convMs + " cpuDelta=" + cpuMs);
                     }
                 }
                 catch (Exception ex)
