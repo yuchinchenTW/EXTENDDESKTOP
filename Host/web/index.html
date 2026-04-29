@@ -112,12 +112,25 @@
     const el = doc.documentElement;
     const inFs = doc.fullscreenElement || doc.webkitFullscreenElement;
     if (inFs) {
-      if (doc.exitFullscreen) doc.exitFullscreen();
-      else if (doc.webkitExitFullscreen) doc.webkitExitFullscreen();
+      try {
+        if (doc.exitFullscreen) doc.exitFullscreen();
+        else if (doc.webkitExitFullscreen) doc.webkitExitFullscreen();
+      } catch (e) {}
+      return;
+    }
+    let attempted = false;
+    try {
+      if (el.requestFullscreen) { el.requestFullscreen(); attempted = true; }
+      else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); attempted = true; }
+      else if (canvas.webkitEnterFullscreen) { canvas.webkitEnterFullscreen(); attempted = true; }
+    } catch (e) {
+      setStatus('Fullscreen denied: ' + e.message, true);
+      return;
+    }
+    if (!attempted) {
+      setStatus('Fullscreen API unavailable (use Safari + Add to Home Screen)', true);
     } else {
-      if (el.requestFullscreen) el.requestFullscreen();
-      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-      else if (canvas.webkitEnterFullscreen) canvas.webkitEnterFullscreen();
+      setStatus('Fullscreen requested...', true);
     }
   }
 
