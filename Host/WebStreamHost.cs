@@ -442,9 +442,9 @@ namespace ExtentDesktop.Host
         private static int ChooseBitrate(int width, int height, int fps)
         {
             long pixelsPerSecond = (long)width * height * fps;
-            int bitrate = (int)(pixelsPerSecond * 0.10);
+            int bitrate = (int)(pixelsPerSecond * 0.06);
             if (bitrate < 1500000) bitrate = 1500000;
-            if (bitrate > 25000000) bitrate = 25000000;
+            if (bitrate > 12000000) bitrate = 12000000;
             return bitrate;
         }
 
@@ -525,7 +525,7 @@ namespace ExtentDesktop.Host
                 var hDst = _graphics.GetHdc();
                 try
                 {
-                    BitBlt(hDst, 0, 0, _width, _height, hSrc, bounds.Left, bounds.Top, 0x00CC0020 | 0x40000000);
+                    BitBlt(hDst, 0, 0, _width, _height, hSrc, bounds.Left, bounds.Top, 0x00CC0020);
                     DrawCursor(hDst, bounds);
                 }
                 finally
