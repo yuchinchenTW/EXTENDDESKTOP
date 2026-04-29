@@ -81,6 +81,7 @@ namespace ExtentDesktop.Host
             try
             {
                 client.NoDelay = true;
+                try { client.SendBufferSize = 1024 * 1024; } catch { }
                 var stream = client.GetStream();
                 stream.ReadTimeout = 5000;
 
