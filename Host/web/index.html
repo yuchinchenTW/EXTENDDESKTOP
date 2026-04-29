@@ -167,14 +167,13 @@
     decoder = new VideoDecoder({
       output: (frame) => {
         decodeCount++;
-        if (pendingFrame) {
-          pendingFrame.close();
+        try {
+          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+          frameCount++;
+        } catch (e) {
+          console.error('drawImage', e);
         }
-        pendingFrame = frame;
-        if (!rafScheduled) {
-          rafScheduled = true;
-          requestAnimationFrame(drawPendingFrame);
-        }
+        frame.close();
       },
       error: (err) => {
         console.error('Decoder error:', err);
