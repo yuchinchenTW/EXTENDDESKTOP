@@ -109,7 +109,6 @@
 
   function toggleFullscreen() {
     const doc = document;
-    const el = doc.documentElement;
     const inFs = doc.fullscreenElement || doc.webkitFullscreenElement;
     if (inFs) {
       try {
@@ -118,20 +117,32 @@
       } catch (e) {}
       return;
     }
-    let attempted = false;
-    try {
-      if (el.requestFullscreen) { el.requestFullscreen(); attempted = true; }
-      else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); attempted = true; }
-      else if (canvas.webkitEnterFullscreen) { canvas.webkitEnterFullscreen(); attempted = true; }
-    } catch (e) {
-      setStatus('Fullscreen denied: ' + e.message, true);
-      return;
+
+    const targets = [
+      [doc.documentElement, 'requestFullscreen'],
+      [doc.documentElement, 'webkitRequestFullscreen'],
+      [doc.body, 'requestFullscreen'],
+      [doc.body, 'webkitRequestFullscreen'],
+      [canvas, 'requestFullscreen'],
+      [canvas, 'webkitRequestFullscreen'],
+      [canvas, 'webkitEnterFullscreen'],
+    ];
+
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i][0];
+      const m = targets[i][1];
+      if (t && typeof t[m] === 'function') {
+        try {
+          const r = t[m]();
+          if (r && r.catch) r.catch(err => setStatus('FS rejected: ' + (err.message || err), true));
+          setStatus('Fullscreen via ' + (t === doc.documentElement ? 'html' : t === doc.body ? 'body' : 'canvas') + '.' + m, true);
+          return;
+        } catch (e) {
+          setStatus('FS attempt failed: ' + e.message, true);
+        }
+      }
     }
-    if (!attempted) {
-      setStatus('Fullscreen API unavailable (use Safari + Add to Home Screen)', true);
-    } else {
-      setStatus('Fullscreen requested...', true);
-    }
+    setStatus('No fullscreen API on this browser. Use Safari → Share → Add to Home Screen for true fullscreen.', true);
   }
 
   canvas.addEventListener('click', toggleFullscreen);
