@@ -74,6 +74,7 @@ namespace ExtentDesktop.Host
             DrainColorConverterAndFeedEncoder(pts);
         }
 
+        private int _drainSuccessLogged = 0;
         public bool TryDrainOutput(out byte[] buffer, out int length, out bool isKeyframe)
         {
             buffer = null;
@@ -84,7 +85,13 @@ namespace ExtentDesktop.Host
             if (!_haveOutputPending) return false;
             _haveOutputPending = false;
 
-            return DoEncoderProcessOutput(out buffer, out length, out isKeyframe);
+            bool ok = DoEncoderProcessOutput(out buffer, out length, out isKeyframe);
+            if (ok && _drainSuccessLogged < 5)
+            {
+                _drainSuccessLogged++;
+                MFHelpers.Log("HwEnc drain ok bytes=" + length + " key=" + isKeyframe);
+            }
+            return ok;
         }
 
         private void DrainEvents()

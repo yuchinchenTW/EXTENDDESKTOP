@@ -352,6 +352,7 @@ namespace ExtentDesktop.Host
                     var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
                     var watch = System.Diagnostics.Stopwatch.StartNew();
                     var nextFrameTicks = watch.ElapsedTicks;
+                    int sentCount = 0;
 
                     while (!token.IsCancellationRequested)
                     {
@@ -385,9 +386,15 @@ namespace ExtentDesktop.Host
                                     {
                                         SendWebSocketBinary(stream, outputBytes, 0, outputLen);
                                     }
+                                    if (sentCount < 5)
+                                    {
+                                        sentCount++;
+                                        MFHelpers.Log("WebStream sent frame #" + sentCount + " bytes=" + outputLen + " key=" + isKeyframe);
+                                    }
                                 }
-                                catch
+                                catch (Exception sendEx)
                                 {
+                                    MFHelpers.Log("WebStream send failed: " + sendEx.Message);
                                     return;
                                 }
                             } while (true);
