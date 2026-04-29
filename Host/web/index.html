@@ -53,12 +53,15 @@
     top: env(safe-area-inset-top, 8px);
     right: 8px;
     color: #8f8;
-    font: bold 14px -apple-system, monospace;
+    font: bold 12px -apple-system, monospace;
     background: rgba(0,0,0,0.5);
     padding: 4px 8px;
     border-radius: 4px;
     z-index: 10;
     pointer-events: none;
+    text-align: right;
+    line-height: 1.4;
+    white-space: pre-line;
   }
 </style>
 </head>
@@ -104,6 +107,8 @@
   let configured = false;
   let waitForKeyframe = true;
   let frameCount = 0;
+  let recvCount = 0;
+  let decodeCount = 0;
   let lastFpsTime = performance.now();
   let pendingFrame = null;
   let rafScheduled = false;
@@ -116,14 +121,15 @@
       ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
       f.close();
       frameCount++;
-      const now = performance.now();
-      if (now - lastFpsTime >= 1000) {
-        fpsEl.textContent = frameCount + ' fps';
-        frameCount = 0;
-        lastFpsTime = now;
-      }
     }
   }
+
+  setInterval(() => {
+    fpsEl.textContent = 'recv ' + recvCount + '\ndec  ' + decodeCount + '\ndraw ' + frameCount;
+    recvCount = 0;
+    decodeCount = 0;
+    frameCount = 0;
+  }, 1000);
 
   function setStatus(text, persist) {
     statusEl.textContent = text;
@@ -160,6 +166,7 @@
 
     decoder = new VideoDecoder({
       output: (frame) => {
+        decodeCount++;
         if (pendingFrame) {
           pendingFrame.close();
         }
@@ -213,6 +220,7 @@
 
       if (!configured || !decoder) return;
 
+      recvCount++;
       const data = new Uint8Array(e.data);
       const isKey = isKeyframe(data);
 
