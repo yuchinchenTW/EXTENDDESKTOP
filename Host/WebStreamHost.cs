@@ -84,7 +84,9 @@ namespace ExtentDesktop.Host
                 var stream = client.GetStream();
                 stream.ReadTimeout = 5000;
 
+                MFHelpers.Log("WebStream: HTTP client " + client.Client.RemoteEndPoint);
                 var requestLine = ReadHttpLine(stream);
+                MFHelpers.Log("WebStream: request='" + requestLine + "'");
                 if (string.IsNullOrEmpty(requestLine))
                 {
                     client.Close();
@@ -189,6 +191,7 @@ namespace ExtentDesktop.Host
             stream.ReadTimeout = System.Threading.Timeout.Infinite;
             _clientCallback("Web client connected from " + client.Client.RemoteEndPoint + ".");
             _statusCallback("Streaming H.264 to " + client.Client.RemoteEndPoint + ".");
+            MFHelpers.Log("WebStream: WS upgraded for " + client.Client.RemoteEndPoint);
 
             try
             {
@@ -199,6 +202,7 @@ namespace ExtentDesktop.Host
 
                 var configMsg = "{\"type\":\"config\",\"width\":" + encodedWidth + ",\"height\":" + encodedHeight + "}";
                 SendWebSocketText(stream, configMsg);
+                MFHelpers.Log("WebStream: config sent " + encodedWidth + "x" + encodedHeight);
 
                 var sessionCts = new CancellationTokenSource();
                 _sessionTokenSource = sessionCts;
@@ -243,6 +247,7 @@ namespace ExtentDesktop.Host
             t.Start();
         }
 
+        private static int _frameLogCount = 0;
         private static bool ReadAndHandleWebSocketFrame(NetworkStream stream, object writeSync)
         {
             byte[] header = new byte[2];
@@ -252,6 +257,11 @@ namespace ExtentDesktop.Host
             int opcode = header[0] & 0x0F;
             bool masked = (header[1] & 0x80) != 0;
             long payloadLen = header[1] & 0x7F;
+
+            if (_frameLogCount++ < 8)
+            {
+                MFHelpers.Log("WebStream incoming: opcode=0x" + opcode.ToString("X") + " masked=" + masked + " len=" + payloadLen);
+            }
 
             if (payloadLen == 126)
             {
