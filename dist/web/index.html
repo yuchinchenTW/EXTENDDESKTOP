@@ -105,6 +105,25 @@
   let waitForKeyframe = true;
   let frameCount = 0;
   let lastFpsTime = performance.now();
+  let pendingFrame = null;
+  let rafScheduled = false;
+
+  function drawPendingFrame() {
+    rafScheduled = false;
+    const f = pendingFrame;
+    pendingFrame = null;
+    if (f) {
+      ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
+      f.close();
+      frameCount++;
+      const now = performance.now();
+      if (now - lastFpsTime >= 1000) {
+        fpsEl.textContent = frameCount + ' fps';
+        frameCount = 0;
+        lastFpsTime = now;
+      }
+    }
+  }
 
   function setStatus(text, persist) {
     statusEl.textContent = text;
@@ -141,14 +160,13 @@
 
     decoder = new VideoDecoder({
       output: (frame) => {
-        ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
-        frame.close();
-        frameCount++;
-        const now = performance.now();
-        if (now - lastFpsTime >= 1000) {
-          fpsEl.textContent = frameCount + ' fps';
-          frameCount = 0;
-          lastFpsTime = now;
+        if (pendingFrame) {
+          pendingFrame.close();
+        }
+        pendingFrame = frame;
+        if (!rafScheduled) {
+          rafScheduled = true;
+          requestAnimationFrame(drawPendingFrame);
         }
       },
       error: (err) => {
@@ -225,6 +243,10 @@
       setStatus('Disconnected. Reconnecting in 2s...', true);
       configured = false;
       waitForKeyframe = true;
+      if (pendingFrame) {
+        try { pendingFrame.close(); } catch (e) {}
+        pendingFrame = null;
+      }
       if (decoder) {
         try { decoder.close(); } catch (e) {}
         decoder = null;
