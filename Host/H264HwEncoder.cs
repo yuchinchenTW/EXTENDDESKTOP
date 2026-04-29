@@ -58,8 +58,12 @@ namespace ExtentDesktop.Host
             }
         }
 
+        private int _submitLogCount = 0;
         public void Submit(IntPtr bgraData, int bgraStride)
         {
+            bool log = _submitLogCount < 3;
+            if (log) MFHelpers.Log("HwEnc Submit#" + _submitLogCount + " begin");
+
             CopyBgraIntoBuffer(bgraData, bgraStride);
 
             long pts = _frameIndex * _frameDurationTicks;
@@ -68,10 +72,14 @@ namespace ExtentDesktop.Host
             MFHelpers.Check(_bgraSample.SetSampleTime(pts), "Hw bgra SetSampleTime");
             MFHelpers.Check(_bgraSample.SetSampleDuration(_frameDurationTicks), "Hw bgra SetSampleDuration");
 
+            if (log) MFHelpers.Log("HwEnc Submit#" + _submitLogCount + " CC.ProcessInput");
             int hr = _colorConverter.ProcessInput(0, _bgraSample, 0);
             MFHelpers.Check(hr, "Hw ColorConvert ProcessInput");
 
+            if (log) MFHelpers.Log("HwEnc Submit#" + _submitLogCount + " before drain+feed");
             DrainColorConverterAndFeedEncoder(pts);
+            if (log) MFHelpers.Log("HwEnc Submit#" + _submitLogCount + " done");
+            _submitLogCount++;
         }
 
         private int _drainSuccessLogged = 0;
@@ -449,14 +457,18 @@ namespace ExtentDesktop.Host
             MFHelpers.Check(_nv12Sample.SetSampleTime(pts), "Hw nv12 SetSampleTime");
             MFHelpers.Check(_nv12Sample.SetSampleDuration(_frameDurationTicks), "Hw nv12 SetSampleDuration");
 
+            bool subLog = _submitLogCount < 3;
+            if (subLog) MFHelpers.Log("HwEnc waiting for NeedInput");
             if (!WaitForNeedInput(200))
             {
                 MFHelpers.Log("HwEnc NeedInput timeout");
                 return;
             }
             _needInputPending = false;
+            if (subLog) MFHelpers.Log("HwEnc got NeedInput, calling ProcessInput");
 
             int piHr = _encoder.ProcessInput(0, _nv12Sample, 0);
+            if (subLog) MFHelpers.Log("HwEnc ProcessInput hr=0x" + piHr.ToString("X8"));
             MFHelpers.Check(piHr, "HW encoder ProcessInput");
         }
 
