@@ -332,58 +332,85 @@ namespace ExtentDesktop.Host
         {
             var bitrate = ChooseBitrate(encodedWidth, encodedHeight, fps);
 
-            using (var encoder = new H264Encoder(encodedWidth, encodedHeight, fps, bitrate))
-            using (var capturer = new GdiBgraCapturer(_captureBoundsProvider, encodedWidth, encodedHeight))
+            H264HwEncoder hwEnc = null;
+            H264Encoder swEnc = null;
+            try
             {
-                var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
-                var watch = System.Diagnostics.Stopwatch.StartNew();
-                var nextFrameTicks = watch.ElapsedTicks;
+                hwEnc = new H264HwEncoder(encodedWidth, encodedHeight, fps, bitrate);
+                MFHelpers.Log("WebStream: using HW H.264 encoder");
+            }
+            catch (Exception ex)
+            {
+                MFHelpers.Log("WebStream: HW encoder unavailable (" + ex.Message + "), falling back to SW");
+                swEnc = new H264Encoder(encodedWidth, encodedHeight, fps, bitrate);
+            }
 
-                while (!token.IsCancellationRequested)
+            try
+            {
+                using (var capturer = new GdiBgraCapturer(_captureBoundsProvider, encodedWidth, encodedHeight))
                 {
-                    System.Drawing.Imaging.BitmapData locked;
-                    if (capturer.TryCaptureLocked(out locked))
-                    {
-                        try
-                        {
-                            encoder.Submit(locked.Scan0, locked.Stride);
-                        }
-                        finally
-                        {
-                            capturer.UnlockCaptured();
-                        }
+                    var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
+                    var watch = System.Diagnostics.Stopwatch.StartNew();
+                    var nextFrameTicks = watch.ElapsedTicks;
 
-                        byte[] outputBytes;
-                        int outputLen;
-                        bool isKeyframe;
-                        while (encoder.TryDrainOutput(out outputBytes, out outputLen, out isKeyframe))
+                    while (!token.IsCancellationRequested)
+                    {
+                        System.Drawing.Imaging.BitmapData locked;
+                        if (capturer.TryCaptureLocked(out locked))
                         {
                             try
                             {
-                                lock (writeSync)
-                                {
-                                    SendWebSocketBinary(stream, outputBytes, 0, outputLen);
-                                }
+                                if (hwEnc != null) hwEnc.Submit(locked.Scan0, locked.Stride);
+                                else swEnc.Submit(locked.Scan0, locked.Stride);
                             }
-                            catch
+                            finally
                             {
-                                return;
+                                capturer.UnlockCaptured();
                             }
+
+                            byte[] outputBytes;
+                            int outputLen;
+                            bool isKeyframe;
+                            bool drained;
+                            do
+                            {
+                                drained = hwEnc != null
+                                    ? hwEnc.TryDrainOutput(out outputBytes, out outputLen, out isKeyframe)
+                                    : swEnc.TryDrainOutput(out outputBytes, out outputLen, out isKeyframe);
+                                if (!drained) break;
+
+                                try
+                                {
+                                    lock (writeSync)
+                                    {
+                                        SendWebSocketBinary(stream, outputBytes, 0, outputLen);
+                                    }
+                                }
+                                catch
+                                {
+                                    return;
+                                }
+                            } while (true);
+                        }
+
+                        nextFrameTicks += targetFrameTicks;
+                        var remainingTicks = nextFrameTicks - watch.ElapsedTicks;
+                        if (remainingTicks > 0)
+                        {
+                            var remainingMs = (int)(remainingTicks * 1000L / System.Diagnostics.Stopwatch.Frequency);
+                            if (remainingMs > 0 && token.WaitHandle.WaitOne(remainingMs)) return;
+                        }
+                        else
+                        {
+                            nextFrameTicks = watch.ElapsedTicks;
                         }
                     }
-
-                    nextFrameTicks += targetFrameTicks;
-                    var remainingTicks = nextFrameTicks - watch.ElapsedTicks;
-                    if (remainingTicks > 0)
-                    {
-                        var remainingMs = (int)(remainingTicks * 1000L / System.Diagnostics.Stopwatch.Frequency);
-                        if (remainingMs > 0 && token.WaitHandle.WaitOne(remainingMs)) return;
-                    }
-                    else
-                    {
-                        nextFrameTicks = watch.ElapsedTicks;
-                    }
                 }
+            }
+            finally
+            {
+                if (hwEnc != null) try { hwEnc.Dispose(); } catch { }
+                if (swEnc != null) try { swEnc.Dispose(); } catch { }
             }
         }
 

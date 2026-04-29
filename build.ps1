@@ -33,6 +33,7 @@ $hostSources = @(
     (Join-Path $root "Host\DisplayHostServer.cs")
     (Join-Path $root "Host\ScreenCaptureStreamer.cs")
     (Join-Path $root "Host\H264Encoder.cs")
+    (Join-Path $root "Host\H264HwEncoder.cs")
     (Join-Path $root "Host\WebStreamHost.cs")
     (Join-Path $root "Host\HostDiscoveryBroadcaster.cs")
 ) + $shared
