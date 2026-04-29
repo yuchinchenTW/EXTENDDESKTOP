@@ -544,7 +544,7 @@ namespace ExtentDesktop.Host
                     }
                     else
                     {
-                        SetStretchBltMode(hDst, 4);
+                        SetStretchBltMode(hDst, 3);
                         StretchBlt(hDst, 0, 0, _width, _height, hSrc, bounds.Left, bounds.Top, bounds.Width, bounds.Height, 0x00CC0020);
                     }
                     DrawCursor(hDst, bounds, _width, _height);
