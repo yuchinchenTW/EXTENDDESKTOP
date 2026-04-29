@@ -21,16 +21,17 @@
   }
   #wrap {
     position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    transform-origin: center center;
+    transition: none;
+  }
+  #wrap.rotate {
+    transform: translate(-50%, -50%) rotate(90deg);
   }
   canvas {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
+    display: block;
     background: #000;
   }
   #status {
@@ -69,9 +70,35 @@
 <script>
 (function () {
   const canvas = document.getElementById('canvas');
+  const wrap = document.getElementById('wrap');
   const ctx = canvas.getContext('2d');
   const statusEl = document.getElementById('status');
   const fpsEl = document.getElementById('fps');
+
+  function updateLayout() {
+    const ww = window.innerWidth;
+    const wh = window.innerHeight;
+    const cw = canvas.width || 1920;
+    const ch = canvas.height || 1080;
+    const winLandscape = ww >= wh;
+    const imgLandscape = cw >= ch;
+
+    if (winLandscape === imgLandscape) {
+      wrap.classList.remove('rotate');
+      const scale = Math.min(ww / cw, wh / ch);
+      canvas.style.width = (cw * scale) + 'px';
+      canvas.style.height = (ch * scale) + 'px';
+    } else {
+      wrap.classList.add('rotate');
+      const scale = Math.min(wh / cw, ww / ch);
+      canvas.style.width = (cw * scale) + 'px';
+      canvas.style.height = (ch * scale) + 'px';
+    }
+  }
+
+  window.addEventListener('resize', updateLayout);
+  window.addEventListener('orientationchange', updateLayout);
+  updateLayout();
 
   let decoder = null;
   let configured = false;
@@ -110,6 +137,7 @@
   function initDecoder(width, height) {
     canvas.width = width;
     canvas.height = height;
+    updateLayout();
 
     decoder = new VideoDecoder({
       output: (frame) => {
