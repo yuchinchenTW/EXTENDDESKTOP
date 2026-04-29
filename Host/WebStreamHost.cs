@@ -197,8 +197,21 @@ namespace ExtentDesktop.Host
             {
                 var bounds = _captureBoundsProvider != null ? _captureBoundsProvider() : SystemInformation.VirtualScreen;
                 if (bounds.Width <= 0 || bounds.Height <= 0) bounds = SystemInformation.VirtualScreen;
-                int encodedWidth = bounds.Width & ~1;
-                int encodedHeight = bounds.Height & ~1;
+
+                int encodedWidth;
+                int encodedHeight;
+                const int maxDim = 1280;
+                if (bounds.Width <= maxDim && bounds.Height <= maxDim)
+                {
+                    encodedWidth = bounds.Width & ~1;
+                    encodedHeight = bounds.Height & ~1;
+                }
+                else
+                {
+                    double scale = Math.Min((double)maxDim / bounds.Width, (double)maxDim / bounds.Height);
+                    encodedWidth = ((int)Math.Round(bounds.Width * scale)) & ~1;
+                    encodedHeight = ((int)Math.Round(bounds.Height * scale)) & ~1;
+                }
 
                 var configMsg = "{\"type\":\"config\",\"width\":" + encodedWidth + ",\"height\":" + encodedHeight + "}";
                 SendWebSocketText(stream, configMsg);
@@ -525,8 +538,16 @@ namespace ExtentDesktop.Host
                 var hDst = _graphics.GetHdc();
                 try
                 {
-                    BitBlt(hDst, 0, 0, _width, _height, hSrc, bounds.Left, bounds.Top, 0x00CC0020);
-                    DrawCursor(hDst, bounds);
+                    if (bounds.Width == _width && bounds.Height == _height)
+                    {
+                        BitBlt(hDst, 0, 0, _width, _height, hSrc, bounds.Left, bounds.Top, 0x00CC0020);
+                    }
+                    else
+                    {
+                        SetStretchBltMode(hDst, 4);
+                        StretchBlt(hDst, 0, 0, _width, _height, hSrc, bounds.Left, bounds.Top, bounds.Width, bounds.Height, 0x00CC0020);
+                    }
+                    DrawCursor(hDst, bounds, _width, _height);
                 }
                 finally
                 {
@@ -539,7 +560,7 @@ namespace ExtentDesktop.Host
                 return true;
             }
 
-            private static void DrawCursor(IntPtr targetDc, Rectangle bounds)
+            private static void DrawCursor(IntPtr targetDc, Rectangle bounds, int targetW, int targetH)
             {
                 var ci = new CURSORINFO();
                 ci.cbSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(CURSORINFO));
@@ -550,9 +571,11 @@ namespace ExtentDesktop.Host
 
                 try
                 {
-                    var x = ci.ptScreenPos.x - ii.xHotspot - bounds.Left;
-                    var y = ci.ptScreenPos.y - ii.yHotspot - bounds.Top;
-                    DrawIconEx(targetDc, x, y, ci.hCursor, 0, 0, 0, IntPtr.Zero, 0x0003);
+                    int srcX = ci.ptScreenPos.x - ii.xHotspot - bounds.Left;
+                    int srcY = ci.ptScreenPos.y - ii.yHotspot - bounds.Top;
+                    int destX = (int)((long)srcX * targetW / bounds.Width);
+                    int destY = (int)((long)srcY * targetH / bounds.Height);
+                    DrawIconEx(targetDc, destX, destY, ci.hCursor, 0, 0, 0, IntPtr.Zero, 0x0003);
                 }
                 finally
                 {
@@ -560,6 +583,13 @@ namespace ExtentDesktop.Host
                     if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor);
                 }
             }
+
+            [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+            [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+            private static extern bool StretchBlt(IntPtr hdcDest, int xDest, int yDest, int wDest, int hDest, IntPtr hdcSrc, int xSrc, int ySrc, int wSrc, int hSrc, int dwRop);
+
+            [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+            private static extern int SetStretchBltMode(IntPtr hdc, int mode);
 
             [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
             private struct POINT { public int x; public int y; }
