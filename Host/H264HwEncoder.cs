@@ -30,6 +30,15 @@ namespace ExtentDesktop.Host
         private bool _needInputPending;
         private bool _haveOutputPending;
 
+        private struct EncodedOutput
+        {
+            public byte[] Bytes;
+            public int Length;
+            public bool IsKeyframe;
+        }
+
+        private readonly System.Collections.Generic.Queue<EncodedOutput> _outputQueue = new System.Collections.Generic.Queue<EncodedOutput>();
+
         public H264HwEncoder(int width, int height, int fps, int bitrate)
         {
             if ((width & 1) != 0 || (height & 1) != 0)
@@ -89,20 +98,24 @@ namespace ExtentDesktop.Host
             length = 0;
             isKeyframe = false;
 
-            DrainEvents();
-            if (!_haveOutputPending) return false;
-            _haveOutputPending = false;
+            DrainEventsAndProcessOutputs();
 
-            bool ok = DoEncoderProcessOutput(out buffer, out length, out isKeyframe);
-            if (ok && _drainSuccessLogged < 5)
+            if (_outputQueue.Count == 0) return false;
+
+            var item = _outputQueue.Dequeue();
+            buffer = item.Bytes;
+            length = item.Length;
+            isKeyframe = item.IsKeyframe;
+
+            if (_drainSuccessLogged < 5)
             {
                 _drainSuccessLogged++;
                 MFHelpers.Log("HwEnc drain ok bytes=" + length + " key=" + isKeyframe);
             }
-            return ok;
+            return true;
         }
 
-        private void DrainEvents()
+        private void DrainEventsAndProcessOutputs()
         {
             const uint MF_EVENT_FLAG_NO_WAIT = 0x00000001;
             while (true)
@@ -113,14 +126,33 @@ namespace ExtentDesktop.Host
                 int met = 0;
                 try { evt.GetType(out met); }
                 finally { Marshal.ReleaseComObject(evt); }
-                if (met == MediaEventTypes.METransformNeedInput) _needInputPending = true;
-                else if (met == MediaEventTypes.METransformHaveOutput) _haveOutputPending = true;
+                HandleEvent(met);
+            }
+        }
+
+        private void HandleEvent(int met)
+        {
+            if (met == MediaEventTypes.METransformNeedInput)
+            {
+                _needInputPending = true;
+            }
+            else if (met == MediaEventTypes.METransformHaveOutput)
+            {
+                byte[] buf;
+                int len;
+                bool key;
+                if (DoEncoderProcessOutput(out buf, out len, out key))
+                {
+                    var copy = new byte[len];
+                    Buffer.BlockCopy(buf, 0, copy, 0, len);
+                    _outputQueue.Enqueue(new EncodedOutput { Bytes = copy, Length = len, IsKeyframe = key });
+                }
             }
         }
 
         private bool WaitForNeedInput(int maxIters)
         {
-            DrainEvents();
+            DrainEventsAndProcessOutputs();
             while (!_needInputPending && maxIters-- > 0)
             {
                 IMFMediaEvent evt;
@@ -129,8 +161,7 @@ namespace ExtentDesktop.Host
                 int met = 0;
                 try { evt.GetType(out met); }
                 finally { Marshal.ReleaseComObject(evt); }
-                if (met == MediaEventTypes.METransformNeedInput) _needInputPending = true;
-                else if (met == MediaEventTypes.METransformHaveOutput) _haveOutputPending = true;
+                HandleEvent(met);
             }
             return _needInputPending;
         }
