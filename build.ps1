@@ -33,6 +33,7 @@ $hostSources = @(
     (Join-Path $root "Host\DisplayHostServer.cs")
     (Join-Path $root "Host\ScreenCaptureStreamer.cs")
     (Join-Path $root "Host\H264Encoder.cs")
+    (Join-Path $root "Host\WebStreamHost.cs")
     (Join-Path $root "Host\HostDiscoveryBroadcaster.cs")
 ) + $shared
 
@@ -57,6 +58,13 @@ if ($LASTEXITCODE -ne 0) {
 & $compiler /nologo /unsafe /target:winexe $receiverOut $refs $receiverSources
 if ($LASTEXITCODE -ne 0) {
     throw "Receiver build failed."
+}
+
+$webSrc = Join-Path $root "Host\web"
+$webDst = Join-Path $outDir "web"
+if (Test-Path $webSrc) {
+    New-Item -ItemType Directory -Force -Path $webDst | Out-Null
+    Copy-Item -Path (Join-Path $webSrc "*") -Destination $webDst -Recurse -Force
 }
 
 Write-Output "Built:"

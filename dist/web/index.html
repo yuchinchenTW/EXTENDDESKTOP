@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>ExtentDesktop</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #000;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #wrap {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    background: #000;
+  }
+  #status {
+    position: fixed;
+    top: env(safe-area-inset-top, 0);
+    left: 0;
+    right: 0;
+    color: #8f8;
+    font: 14px -apple-system, monospace;
+    text-align: center;
+    padding: 6px;
+    background: rgba(0,0,0,0.6);
+    z-index: 10;
+    pointer-events: none;
+  }
+  #status.hidden { opacity: 0; transition: opacity 1s; }
+  #fps {
+    position: fixed;
+    top: env(safe-area-inset-top, 8px);
+    right: 8px;
+    color: #8f8;
+    font: bold 14px -apple-system, monospace;
+    background: rgba(0,0,0,0.5);
+    padding: 4px 8px;
+    border-radius: 4px;
+    z-index: 10;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="canvas"></canvas></div>
+<div id="status">Connecting...</div>
+<div id="fps">-- fps</div>
+
+<script>
+(function () {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+  const fpsEl = document.getElementById('fps');
+
+  let decoder = null;
+  let configured = false;
+  let waitForKeyframe = true;
+  let frameCount = 0;
+  let lastFpsTime = performance.now();
+
+  function setStatus(text, persist) {
+    statusEl.textContent = text;
+    statusEl.classList.remove('hidden');
+    if (!persist) {
+      setTimeout(() => statusEl.classList.add('hidden'), 1500);
+    }
+  }
+
+  function isKeyframe(data) {
+    let i = 0;
+    while (i < data.length - 4) {
+      if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 1) {
+        const t = data[i + 3] & 0x1F;
+        if (t === 5) return true;
+        if (t === 1) return false;
+        i += 3;
+      } else if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0 && data[i + 3] === 1) {
+        const t = data[i + 4] & 0x1F;
+        if (t === 5) return true;
+        if (t === 1) return false;
+        i += 4;
+      } else {
+        i++;
+      }
+    }
+    return false;
+  }
+
+  function initDecoder(width, height) {
+    canvas.width = width;
+    canvas.height = height;
+
+    decoder = new VideoDecoder({
+      output: (frame) => {
+        ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+        frame.close();
+        frameCount++;
+        const now = performance.now();
+        if (now - lastFpsTime >= 1000) {
+          fpsEl.textContent = frameCount + ' fps';
+          frameCount = 0;
+          lastFpsTime = now;
+        }
+      },
+      error: (err) => {
+        console.error('Decoder error:', err);
+        setStatus('Decoder error: ' + err.message, true);
+        configured = false;
+        waitForKeyframe = true;
+      }
+    });
+
+    decoder.configure({
+      codec: 'avc1.640032',
+      optimizeForLatency: true
+    });
+    configured = true;
+    waitForKeyframe = true;
+    setStatus('Decoder ready ' + width + 'x' + height);
+  }
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = proto + '//' + location.host + '/stream';
+    setStatus('Connecting to ' + wsUrl, true);
+
+    const ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      setStatus('Connected, waiting for video...', true);
+    };
+
+    ws.onmessage = (e) => {
+      if (typeof e.data === 'string') {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'config') {
+            initDecoder(msg.width, msg.height);
+          }
+        } catch (err) {
+          console.warn('bad text message', e.data);
+        }
+        return;
+      }
+
+      if (!configured || !decoder) return;
+
+      const data = new Uint8Array(e.data);
+      const isKey = isKeyframe(data);
+
+      if (waitForKeyframe) {
+        if (!isKey) return;
+        waitForKeyframe = false;
+        statusEl.classList.add('hidden');
+      }
+
+      try {
+        const chunk = new EncodedVideoChunk({
+          type: isKey ? 'key' : 'delta',
+          timestamp: performance.now() * 1000,
+          data: data
+        });
+        decoder.decode(chunk);
+      } catch (err) {
+        console.error('decode error', err);
+        waitForKeyframe = true;
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('WebSocket error', err);
+    };
+
+    ws.onclose = () => {
+      setStatus('Disconnected. Reconnecting in 2s...', true);
+      configured = false;
+      waitForKeyframe = true;
+      if (decoder) {
+        try { decoder.close(); } catch (e) {}
+        decoder = null;
+      }
+      setTimeout(connect, 2000);
+    };
+  }
+
+  if (typeof VideoDecoder === 'undefined') {
+    setStatus('WebCodecs not supported. Need iOS 17.4+ Safari.', true);
+    return;
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

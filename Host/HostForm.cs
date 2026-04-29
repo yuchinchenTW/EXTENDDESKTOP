@@ -17,6 +17,7 @@ namespace ExtentDesktop.Host
         private readonly TextBox _notesTextBox;
 
         private DisplayHostServer _server;
+        private WebStreamHost _webServer;
 
         public HostForm()
         {
@@ -172,6 +173,11 @@ namespace ExtentDesktop.Host
                 _server.Dispose();
                 _server = null;
             }
+            if (_webServer != null)
+            {
+                _webServer.Dispose();
+                _webServer = null;
+            }
         }
 
         private void RefreshButton_Click(object sender, EventArgs e)
@@ -198,6 +204,21 @@ namespace ExtentDesktop.Host
             {
                 _server = new DisplayHostServer(UpdateStatus, UpdateClient);
                 _server.Start(port, _passwordTextBox.Text, GetSelectedCaptureBounds, GetSelectedDisplayLabel);
+
+                try
+                {
+                    var indexHtml = LoadIndexHtml();
+                    if (indexHtml != null)
+                    {
+                        _webServer = new WebStreamHost(UpdateStatus, UpdateClient);
+                        _webServer.Start(port + 1, indexHtml, GetSelectedCaptureBounds, GetSelectedDisplayLabel);
+                    }
+                }
+                catch (Exception webEx)
+                {
+                    UpdateStatus("Web stream not available: " + webEx.Message);
+                }
+
                 _startButton.Enabled = false;
                 _stopButton.Enabled = true;
                 _portTextBox.Enabled = false;
@@ -224,6 +245,11 @@ namespace ExtentDesktop.Host
                 _server.Dispose();
                 _server = null;
             }
+            if (_webServer != null)
+            {
+                _webServer.Dispose();
+                _webServer = null;
+            }
 
             _startButton.Enabled = true;
             _stopButton.Enabled = false;
@@ -233,6 +259,23 @@ namespace ExtentDesktop.Host
             _refreshButton.Enabled = true;
             _statusLabel.Text = "Status: Stopped.";
             _clientLabel.Text = "Receiver: No receiver connected.";
+        }
+
+        private static byte[] LoadIndexHtml()
+        {
+            try
+            {
+                var dir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                var path = System.IO.Path.Combine(dir, "web", "index.html");
+                if (System.IO.File.Exists(path))
+                {
+                    return System.IO.File.ReadAllBytes(path);
+                }
+            }
+            catch
+            {
+            }
+            return null;
         }
 
         private void UpdateStatus(string text)
