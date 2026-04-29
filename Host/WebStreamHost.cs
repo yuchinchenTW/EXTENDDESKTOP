@@ -389,6 +389,7 @@ namespace ExtentDesktop.Host
                 try
                 {
                     BitBlt(hDst, 0, 0, _width, _height, hSrc, bounds.Left, bounds.Top, 0x00CC0020 | 0x40000000);
+                    DrawCursor(hDst, bounds);
                 }
                 finally
                 {
@@ -400,6 +401,66 @@ namespace ExtentDesktop.Host
                 data = _locked;
                 return true;
             }
+
+            private static void DrawCursor(IntPtr targetDc, Rectangle bounds)
+            {
+                var ci = new CURSORINFO();
+                ci.cbSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(CURSORINFO));
+                if (!GetCursorInfo(ref ci) || ci.flags != 0x00000001 || ci.hCursor == IntPtr.Zero) return;
+
+                ICONINFO ii;
+                if (!GetIconInfo(ci.hCursor, out ii)) return;
+
+                try
+                {
+                    var x = ci.ptScreenPos.x - ii.xHotspot - bounds.Left;
+                    var y = ci.ptScreenPos.y - ii.yHotspot - bounds.Top;
+                    DrawIconEx(targetDc, x, y, ci.hCursor, 0, 0, 0, IntPtr.Zero, 0x0003);
+                }
+                finally
+                {
+                    if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask);
+                    if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor);
+                }
+            }
+
+            [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+            private struct POINT { public int x; public int y; }
+
+            [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+            private struct CURSORINFO
+            {
+                public int cbSize;
+                public int flags;
+                public IntPtr hCursor;
+                public POINT ptScreenPos;
+            }
+
+            [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+            private struct ICONINFO
+            {
+                public bool fIcon;
+                public int xHotspot;
+                public int yHotspot;
+                public IntPtr hbmMask;
+                public IntPtr hbmColor;
+            }
+
+            [System.Runtime.InteropServices.DllImport("user32.dll")]
+            [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+            private static extern bool GetCursorInfo(ref CURSORINFO pci);
+
+            [System.Runtime.InteropServices.DllImport("user32.dll")]
+            [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+            private static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
+
+            [System.Runtime.InteropServices.DllImport("user32.dll")]
+            [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+            private static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyHeight, int istepIfAniCur, IntPtr hbrFlickerFreeDraw, int diFlags);
+
+            [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+            [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+            private static extern bool DeleteObject(IntPtr hObject);
 
             public void UnlockCaptured()
             {
