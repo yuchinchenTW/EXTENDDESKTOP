@@ -101,7 +101,46 @@
 
   window.addEventListener('resize', updateLayout);
   window.addEventListener('orientationchange', updateLayout);
+  if (document.addEventListener) {
+    document.addEventListener('fullscreenchange', updateLayout);
+    document.addEventListener('webkitfullscreenchange', updateLayout);
+  }
   updateLayout();
+
+  function toggleFullscreen() {
+    const doc = document;
+    const el = doc.documentElement;
+    const inFs = doc.fullscreenElement || doc.webkitFullscreenElement;
+    if (inFs) {
+      if (doc.exitFullscreen) doc.exitFullscreen();
+      else if (doc.webkitExitFullscreen) doc.webkitExitFullscreen();
+    } else {
+      if (el.requestFullscreen) el.requestFullscreen();
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+      else if (canvas.webkitEnterFullscreen) canvas.webkitEnterFullscreen();
+    }
+  }
+
+  canvas.addEventListener('click', toggleFullscreen);
+  document.body.addEventListener('click', (e) => {
+    if (e.target === document.body || e.target.id === 'wrap') toggleFullscreen();
+  });
+
+  let wakeLock = null;
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (e) {
+      console.warn('wakeLock failed', e);
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') requestWakeLock();
+  });
+  document.addEventListener('click', requestWakeLock, { once: true });
 
   let decoder = null;
   let configured = false;
