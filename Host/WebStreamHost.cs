@@ -353,12 +353,18 @@ namespace ExtentDesktop.Host
                     var watch = System.Diagnostics.Stopwatch.StartNew();
                     var nextFrameTicks = watch.ElapsedTicks;
                     int sentCount = 0;
+                    long freq = System.Diagnostics.Stopwatch.Frequency;
+                    int slowLogCount = 0;
 
                     while (!token.IsCancellationRequested)
                     {
+                        long t0 = watch.ElapsedTicks;
                         System.Drawing.Imaging.BitmapData locked;
+                        long tCap = t0;
+                        long tEnc = t0;
                         if (capturer.TryCaptureLocked(out locked))
                         {
+                            tCap = watch.ElapsedTicks;
                             try
                             {
                                 if (hwEnc != null) hwEnc.Submit(locked.Scan0, locked.Stride);
@@ -368,6 +374,7 @@ namespace ExtentDesktop.Host
                             {
                                 capturer.UnlockCaptured();
                             }
+                            tEnc = watch.ElapsedTicks;
 
                             byte[] outputBytes;
                             int outputLen;
@@ -398,6 +405,17 @@ namespace ExtentDesktop.Host
                                     return;
                                 }
                             } while (true);
+
+                            long tSend = watch.ElapsedTicks;
+                            long totalMs = (tSend - t0) * 1000L / freq;
+                            if (totalMs > 25 && slowLogCount < 30)
+                            {
+                                slowLogCount++;
+                                long capMs = (tCap - t0) * 1000L / freq;
+                                long encMs = (tEnc - tCap) * 1000L / freq;
+                                long sendMs = (tSend - tEnc) * 1000L / freq;
+                                MFHelpers.Log("WebStream SLOW total=" + totalMs + " cap=" + capMs + " enc=" + encMs + " send=" + sendMs);
+                            }
                         }
 
                         nextFrameTicks += targetFrameTicks;
