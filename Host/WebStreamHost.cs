@@ -200,12 +200,14 @@ namespace ExtentDesktop.Host
                 var configMsg = "{\"type\":\"config\",\"width\":" + encodedWidth + ",\"height\":" + encodedHeight + "}";
                 SendWebSocketText(stream, configMsg);
 
-                _sessionTokenSource = new CancellationTokenSource();
-                var token = _sessionTokenSource.Token;
+                var sessionCts = new CancellationTokenSource();
+                _sessionTokenSource = sessionCts;
+                var token = sessionCts.Token;
+                var writeSync = new object();
 
-                StartReaderThread(stream, token);
+                StartReaderThread(stream, sessionCts, writeSync);
 
-                WebSocketStreamFrames(stream, token, 60, encodedWidth, encodedHeight);
+                WebSocketStreamFrames(stream, token, 60, encodedWidth, encodedHeight, writeSync);
             }
             catch (Exception ex)
             {
@@ -219,30 +221,104 @@ namespace ExtentDesktop.Host
             }
         }
 
-        private void StartReaderThread(NetworkStream stream, CancellationToken token)
+        private void StartReaderThread(NetworkStream stream, CancellationTokenSource sessionCts, object writeSync)
         {
             var t = new Thread(() =>
             {
                 try
                 {
-                    byte[] buf = new byte[2048];
-                    while (!token.IsCancellationRequested)
+                    while (!sessionCts.IsCancellationRequested)
                     {
-                        int read = stream.Read(buf, 0, buf.Length);
-                        if (read <= 0) break;
+                        if (!ReadAndHandleWebSocketFrame(stream, writeSync)) break;
                     }
                 }
                 catch { }
                 finally
                 {
-                    try { _sessionTokenSource.Cancel(); } catch { }
+                    try { sessionCts.Cancel(); } catch { }
                 }
             });
             t.IsBackground = true;
+            t.Name = "WebSocketReader";
             t.Start();
         }
 
-        private void WebSocketStreamFrames(NetworkStream stream, CancellationToken token, int fps, int encodedWidth, int encodedHeight)
+        private static bool ReadAndHandleWebSocketFrame(NetworkStream stream, object writeSync)
+        {
+            byte[] header = new byte[2];
+            if (!ReadFull(stream, header, 0, 2)) return false;
+
+            bool fin = (header[0] & 0x80) != 0;
+            int opcode = header[0] & 0x0F;
+            bool masked = (header[1] & 0x80) != 0;
+            long payloadLen = header[1] & 0x7F;
+
+            if (payloadLen == 126)
+            {
+                byte[] ext = new byte[2];
+                if (!ReadFull(stream, ext, 0, 2)) return false;
+                payloadLen = (ext[0] << 8) | ext[1];
+            }
+            else if (payloadLen == 127)
+            {
+                byte[] ext = new byte[8];
+                if (!ReadFull(stream, ext, 0, 8)) return false;
+                payloadLen = 0;
+                for (int i = 0; i < 8; i++) payloadLen = (payloadLen << 8) | ext[i];
+            }
+
+            byte[] mask = null;
+            if (masked)
+            {
+                mask = new byte[4];
+                if (!ReadFull(stream, mask, 0, 4)) return false;
+            }
+
+            byte[] payload = null;
+            if (payloadLen > 0)
+            {
+                if (payloadLen > 16 * 1024 * 1024) return false;
+                payload = new byte[payloadLen];
+                if (!ReadFull(stream, payload, 0, (int)payloadLen)) return false;
+                if (masked)
+                {
+                    for (int i = 0; i < payload.Length; i++) payload[i] ^= mask[i & 3];
+                }
+            }
+
+            if (opcode == 0x8)
+            {
+                lock (writeSync)
+                {
+                    SendWebSocketFrame(stream, 0x8, payload ?? new byte[0], 0, payload != null ? payload.Length : 0);
+                }
+                return false;
+            }
+            if (opcode == 0x9)
+            {
+                lock (writeSync)
+                {
+                    SendWebSocketFrame(stream, 0xA, payload ?? new byte[0], 0, payload != null ? payload.Length : 0);
+                }
+                return true;
+            }
+
+            return true;
+        }
+
+        private static bool ReadFull(NetworkStream stream, byte[] buf, int offset, int length)
+        {
+            int got = 0;
+            while (got < length)
+            {
+                int n = stream.Read(buf, offset + got, length - got);
+                if (n <= 0) return false;
+                got += n;
+            }
+            return true;
+        }
+
+        private void WebSocketStreamFrames(NetworkStream stream, CancellationToken token, int fps, int encodedWidth, int encodedHeight, object writeSync)
         {
             var bitrate = ChooseBitrate(encodedWidth, encodedHeight, fps);
 
@@ -252,7 +328,6 @@ namespace ExtentDesktop.Host
                 var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
                 var watch = System.Diagnostics.Stopwatch.StartNew();
                 var nextFrameTicks = watch.ElapsedTicks;
-                var writeSync = new object();
 
                 while (!token.IsCancellationRequested)
                 {
