@@ -27,6 +27,8 @@ namespace ExtentDesktop.Host
         private long _frameIndex;
         private bool _streaming;
         private byte[] _outputScratch = new byte[256 * 1024];
+        private bool _needInputPending;
+        private bool _haveOutputPending;
 
         public H264HwEncoder(int width, int height, int fps, int bitrate)
         {
@@ -78,10 +80,44 @@ namespace ExtentDesktop.Host
             length = 0;
             isKeyframe = false;
 
-            int evt = TryGetEventNonBlocking(_encoderEvents);
-            if (evt != MediaEventTypes.METransformHaveOutput) return false;
+            DrainEvents();
+            if (!_haveOutputPending) return false;
+            _haveOutputPending = false;
 
             return DoEncoderProcessOutput(out buffer, out length, out isKeyframe);
+        }
+
+        private void DrainEvents()
+        {
+            const uint MF_EVENT_FLAG_NO_WAIT = 0x00000001;
+            while (true)
+            {
+                IMFMediaEvent evt;
+                int hr = _encoderEvents.GetEvent(MF_EVENT_FLAG_NO_WAIT, out evt);
+                if (hr < 0) return;
+                int met = 0;
+                try { evt.GetType(out met); }
+                finally { Marshal.ReleaseComObject(evt); }
+                if (met == MediaEventTypes.METransformNeedInput) _needInputPending = true;
+                else if (met == MediaEventTypes.METransformHaveOutput) _haveOutputPending = true;
+            }
+        }
+
+        private bool WaitForNeedInput(int maxIters)
+        {
+            DrainEvents();
+            while (!_needInputPending && maxIters-- > 0)
+            {
+                IMFMediaEvent evt;
+                int hr = _encoderEvents.GetEvent(0, out evt);
+                if (hr < 0) return false;
+                int met = 0;
+                try { evt.GetType(out met); }
+                finally { Marshal.ReleaseComObject(evt); }
+                if (met == MediaEventTypes.METransformNeedInput) _needInputPending = true;
+                else if (met == MediaEventTypes.METransformHaveOutput) _haveOutputPending = true;
+            }
+            return _needInputPending;
         }
 
         public void Dispose()
@@ -406,7 +442,13 @@ namespace ExtentDesktop.Host
             MFHelpers.Check(_nv12Sample.SetSampleTime(pts), "Hw nv12 SetSampleTime");
             MFHelpers.Check(_nv12Sample.SetSampleDuration(_frameDurationTicks), "Hw nv12 SetSampleDuration");
 
-            WaitForEvent(_encoderEvents, MediaEventTypes.METransformNeedInput, "HwEnc NeedInput");
+            if (!WaitForNeedInput(200))
+            {
+                MFHelpers.Log("HwEnc NeedInput timeout");
+                return;
+            }
+            _needInputPending = false;
+
             int piHr = _encoder.ProcessInput(0, _nv12Sample, 0);
             MFHelpers.Check(piHr, "HW encoder ProcessInput");
         }
