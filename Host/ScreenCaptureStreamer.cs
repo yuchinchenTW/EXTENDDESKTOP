@@ -20,82 +20,126 @@ namespace ExtentDesktop.Host
 
             var bitrate = ChooseBitrate(encodedWidth, encodedHeight, fps);
 
-            using (var encoder = new H264Encoder(encodedWidth, encodedHeight, fps, bitrate))
-            using (var capturer = new GdiCaptureSession(captureBoundsProvider, encodedWidth, encodedHeight))
+            H264HwEncoder hwEncoder = null;
+            H264Encoder swEncoder = null;
+
+            try
             {
-                var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
-                var watch = System.Diagnostics.Stopwatch.StartNew();
-                var nextFrameTicks = watch.ElapsedTicks;
-
-                while (!token.IsCancellationRequested)
+                try
                 {
-                    long t0 = watch.ElapsedTicks;
-                    BitmapData locked;
-                    long tCap = t0;
-                    long tEnc = t0;
-                    if (capturer.TryCaptureLocked(out locked))
-                    {
-                        tCap = watch.ElapsedTicks;
-                        try
-                        {
-                            encoder.Submit(locked.Scan0, locked.Stride);
-                        }
-                        finally
-                        {
-                            capturer.UnlockCaptured();
-                        }
-                        tEnc = watch.ElapsedTicks;
+                    hwEncoder = new H264HwEncoder(encodedWidth, encodedHeight, fps, bitrate);
+                    MFHelpers.Log("Using H.264 HW encoder path");
+                }
+                catch (Exception ex)
+                {
+                    MFHelpers.Log("HW encoder init failed, using SW: " + ex.Message);
+                    swEncoder = new H264Encoder(encodedWidth, encodedHeight, fps, bitrate);
+                }
 
-                        byte[] outputBytes;
-                        int outputLen;
-                        bool isKeyframe;
-                        while (encoder.TryDrainOutput(out outputBytes, out outputLen, out isKeyframe))
+                using (var capturer = new GdiCaptureSession(captureBoundsProvider, encodedWidth, encodedHeight))
+                {
+                    var targetFrameTicks = (long)(System.Diagnostics.Stopwatch.Frequency / (double)Math.Max(1, fps));
+                    var watch = System.Diagnostics.Stopwatch.StartNew();
+                    var nextFrameTicks = watch.ElapsedTicks;
+
+                    while (!token.IsCancellationRequested)
+                    {
+                        long t0 = watch.ElapsedTicks;
+                        BitmapData locked;
+                        long tCap = t0;
+                        long tEnc = t0;
+                        if (capturer.TryCaptureLocked(out locked))
                         {
-                            int len = outputLen;
-                            byte[] buf = outputBytes;
+                            tCap = watch.ElapsedTicks;
                             try
                             {
-                                Protocol.SendMessage(stream, writeSync, MessageType.Frame, delegate(BinaryWriter writer)
+                                if (hwEncoder != null)
                                 {
-                                    writer.Write(encodedWidth);
-                                    writer.Write(encodedHeight);
-                                    writer.Write(len);
-                                    writer.Write(buf, 0, len);
-                                });
+                                    hwEncoder.Submit(locked.Scan0, locked.Stride);
+                                }
+                                else
+                                {
+                                    swEncoder.Submit(locked.Scan0, locked.Stride);
+                                }
                             }
-                            catch
+                            finally
+                            {
+                                capturer.UnlockCaptured();
+                            }
+                            tEnc = watch.ElapsedTicks;
+
+                            byte[] outputBytes;
+                            int outputLen;
+                            bool isKeyframe;
+                            while (TryDrainEncoderOutput(hwEncoder, swEncoder, out outputBytes, out outputLen, out isKeyframe))
+                            {
+                                int len = outputLen;
+                                byte[] buf = outputBytes;
+                                try
+                                {
+                                    Protocol.SendMessage(stream, writeSync, MessageType.Frame, delegate(BinaryWriter writer)
+                                    {
+                                        writer.Write(encodedWidth);
+                                        writer.Write(encodedHeight);
+                                        writer.Write(len);
+                                        writer.Write(buf, 0, len);
+                                    });
+                                }
+                                catch
+                                {
+                                    return;
+                                }
+                            }
+
+                            long tSend = watch.ElapsedTicks;
+                            long totalMs = (tSend - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                            if (totalMs > 50)
+                            {
+                                long capMs = (tCap - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                                long encMs = (tEnc - tCap) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                                long sendMs = (tSend - tEnc) * 1000L / System.Diagnostics.Stopwatch.Frequency;
+                                MFHelpers.Log("SLOW frame total=" + totalMs + "ms cap=" + capMs + " enc=" + encMs + " send=" + sendMs);
+                            }
+                        }
+
+                        nextFrameTicks += targetFrameTicks;
+                        var remainingTicks = nextFrameTicks - watch.ElapsedTicks;
+                        if (remainingTicks > 0)
+                        {
+                            var remainingMs = (int)(remainingTicks * 1000L / System.Diagnostics.Stopwatch.Frequency);
+                            if (remainingMs > 0 && token.WaitHandle.WaitOne(remainingMs))
                             {
                                 return;
                             }
                         }
-
-                        long tSend = watch.ElapsedTicks;
-                        long totalMs = (tSend - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                        if (totalMs > 50)
+                        else
                         {
-                            long capMs = (tCap - t0) * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                            long encMs = (tEnc - tCap) * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                            long sendMs = (tSend - tEnc) * 1000L / System.Diagnostics.Stopwatch.Frequency;
-                            MFHelpers.Log("SLOW frame total=" + totalMs + "ms cap=" + capMs + " enc=" + encMs + " send=" + sendMs);
+                            nextFrameTicks = watch.ElapsedTicks;
                         }
-                    }
-
-                    nextFrameTicks += targetFrameTicks;
-                    var remainingTicks = nextFrameTicks - watch.ElapsedTicks;
-                    if (remainingTicks > 0)
-                    {
-                        var remainingMs = (int)(remainingTicks * 1000L / System.Diagnostics.Stopwatch.Frequency);
-                        if (remainingMs > 0 && token.WaitHandle.WaitOne(remainingMs))
-                        {
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        nextFrameTicks = watch.ElapsedTicks;
                     }
                 }
             }
+            finally
+            {
+                if (hwEncoder != null)
+                {
+                    try { hwEncoder.Dispose(); } catch { }
+                }
+                if (swEncoder != null)
+                {
+                    try { swEncoder.Dispose(); } catch { }
+                }
+            }
+        }
+
+        private static bool TryDrainEncoderOutput(H264HwEncoder hwEncoder, H264Encoder swEncoder, out byte[] buffer, out int length, out bool isKeyframe)
+        {
+            if (hwEncoder != null)
+            {
+                return hwEncoder.TryDrainOutput(out buffer, out length, out isKeyframe);
+            }
+
+            return swEncoder.TryDrainOutput(out buffer, out length, out isKeyframe);
         }
 
         private static Rectangle ResolveStartBounds(Func<Rectangle> provider)
@@ -111,10 +155,10 @@ namespace ExtentDesktop.Host
         private static int ChooseBitrate(int width, int height, int fps)
         {
             long pixelsPerSecond = (long)width * height * fps;
-            double bppFactor = 0.10;
+            double bppFactor = 0.06;
             int bitrate = (int)(pixelsPerSecond * bppFactor);
             if (bitrate < 1500000) bitrate = 1500000;
-            if (bitrate > 25000000) bitrate = 25000000;
+            if (bitrate > 12000000) bitrate = 12000000;
             return bitrate;
         }
 

@@ -9,6 +9,7 @@ namespace ExtentDesktop.Host
         private readonly int _width;
         private readonly int _height;
         private readonly int _fps;
+        private readonly int _bitrate;
         private readonly long _frameDurationTicks;
 
         private IMFTransform _encoder;
@@ -37,6 +38,7 @@ namespace ExtentDesktop.Host
             _width = width;
             _height = height;
             _fps = fps;
+            _bitrate = bitrate;
             _frameDurationTicks = 10000000L / fps;
 
             MFHelpers.Check(MFNative.MFStartup(MFConstants.MF_VERSION, MFConstants.MFSTARTUP_LITE), "MFStartup");
@@ -591,16 +593,16 @@ namespace ExtentDesktop.Host
 
                 var lowLatencyKey = MFGuids.CODECAPI_AVLowLatencyMode;
                 var rateModeKey = MFGuids.CODECAPI_AVEncCommonRateControlMode;
+                var meanBitrateKey = MFGuids.CODECAPI_AVEncCommonMeanBitRate;
                 var gopKey = MFGuids.CODECAPI_AVEncMPVGOPSize;
                 var bFramesKey = MFGuids.CODECAPI_AVEncMPVDefaultBPictureCount;
-                var qualityKey = MFGuids.CODECAPI_AVEncCommonQuality;
                 var threadsKey = MFGuids.CODECAPI_AVEncNumWorkerThreads;
 
                 SetVariantBool(codecApi, ref lowLatencyKey, true);
                 SetVariantUInt32(codecApi, ref bFramesKey, 0);
-                SetVariantUInt32(codecApi, ref rateModeKey, (uint)MFConstants.eAVEncCommonRateControlMode_Quality);
-                SetVariantUInt32(codecApi, ref qualityKey, 100);
-                SetVariantUInt32(codecApi, ref gopKey, (uint)(_fps * 5));
+                SetVariantUInt32(codecApi, ref rateModeKey, (uint)MFConstants.eAVEncCommonRateControlMode_CBR);
+                SetVariantUInt32(codecApi, ref meanBitrateKey, (uint)_bitrate);
+                SetVariantUInt32(codecApi, ref gopKey, (uint)_fps);
                 SetVariantUInt32(codecApi, ref threadsKey, 0);
             }
             catch
