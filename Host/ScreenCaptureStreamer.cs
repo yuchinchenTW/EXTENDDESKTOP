@@ -12,11 +12,13 @@ namespace ExtentDesktop.Host
 {
     internal static class ScreenCaptureStreamer
     {
-        public static void StreamFrames(NetworkStream stream, object writeSync, CancellationToken token, int fps, Func<Rectangle> captureBoundsProvider)
+        public static void StreamFrames(NetworkStream stream, object writeSync, CancellationToken token, int fps, Func<Rectangle> captureBoundsProvider, int maxDimension)
         {
             var bounds = ResolveStartBounds(captureBoundsProvider);
-            var encodedWidth = bounds.Width & ~1;
-            var encodedHeight = bounds.Height & ~1;
+            int encodedWidth;
+            int encodedHeight;
+            ResolveEncodedSize(bounds, maxDimension, out encodedWidth, out encodedHeight);
+            MFHelpers.Log("TCP stream size " + encodedWidth + "x" + encodedHeight + " from source " + bounds.Width + "x" + bounds.Height + " maxDim=" + maxDimension);
 
             var bitrate = ChooseBitrate(encodedWidth, encodedHeight, fps);
 
@@ -152,6 +154,24 @@ namespace ExtentDesktop.Host
             return bounds;
         }
 
+        private static void ResolveEncodedSize(Rectangle bounds, int maxDimension, out int encodedWidth, out int encodedHeight)
+        {
+            if (maxDimension <= 0 || bounds.Width <= maxDimension && bounds.Height <= maxDimension)
+            {
+                encodedWidth = bounds.Width & ~1;
+                encodedHeight = bounds.Height & ~1;
+            }
+            else
+            {
+                double scale = Math.Min((double)maxDimension / bounds.Width, (double)maxDimension / bounds.Height);
+                encodedWidth = ((int)Math.Round(bounds.Width * scale)) & ~1;
+                encodedHeight = ((int)Math.Round(bounds.Height * scale)) & ~1;
+            }
+
+            if (encodedWidth < 2) encodedWidth = 2;
+            if (encodedHeight < 2) encodedHeight = 2;
+        }
+
         private static int ChooseBitrate(int width, int height, int fps)
         {
             long pixelsPerSecond = (long)width * height * fps;
@@ -243,12 +263,23 @@ namespace ExtentDesktop.Host
                 try
                 {
                     targetDc = _captureGraphics.GetHdc();
-                    if (!BitBlt(targetDc, 0, 0, _captureWidth, _captureHeight, screenDc, bounds.Left, bounds.Top, CopyPixelOperation.SourceCopy | CopyPixelOperation.CaptureBlt))
+                    if (bounds.Width == _captureWidth && bounds.Height == _captureHeight)
                     {
-                        throw new InvalidOperationException("BitBlt screen capture failed.");
+                        if (!BitBlt(targetDc, 0, 0, _captureWidth, _captureHeight, screenDc, bounds.Left, bounds.Top, CopyPixelOperation.SourceCopy | CopyPixelOperation.CaptureBlt))
+                        {
+                            throw new InvalidOperationException("BitBlt screen capture failed.");
+                        }
+                    }
+                    else
+                    {
+                        SetStretchBltMode(targetDc, COLORONCOLOR);
+                        if (!StretchBlt(targetDc, 0, 0, _captureWidth, _captureHeight, screenDc, bounds.Left, bounds.Top, bounds.Width, bounds.Height, CopyPixelOperation.SourceCopy | CopyPixelOperation.CaptureBlt))
+                        {
+                            throw new InvalidOperationException("StretchBlt screen capture failed.");
+                        }
                     }
 
-                    DrawCursor(targetDc, bounds);
+                    DrawCursor(targetDc, bounds, _captureWidth, _captureHeight);
                 }
                 finally
                 {
@@ -261,7 +292,7 @@ namespace ExtentDesktop.Host
                 }
             }
 
-            private static void DrawCursor(IntPtr targetDc, Rectangle bounds)
+            private static void DrawCursor(IntPtr targetDc, Rectangle bounds, int targetWidth, int targetHeight)
             {
                 var ci = new CURSORINFO();
                 ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
@@ -279,8 +310,10 @@ namespace ExtentDesktop.Host
 
                 try
                 {
-                    var x = ci.ptScreenPos.x - ii.xHotspot - bounds.Left;
-                    var y = ci.ptScreenPos.y - ii.yHotspot - bounds.Top;
+                    var sourceX = ci.ptScreenPos.x - ii.xHotspot - bounds.Left;
+                    var sourceY = ci.ptScreenPos.y - ii.yHotspot - bounds.Top;
+                    var x = (int)((long)sourceX * targetWidth / bounds.Width);
+                    var y = (int)((long)sourceY * targetHeight / bounds.Height);
                     DrawIconEx(targetDc, x, y, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
                 }
                 finally
@@ -299,6 +332,7 @@ namespace ExtentDesktop.Host
 
             private const int CURSOR_SHOWING = 0x00000001;
             private const int DI_NORMAL = 0x0003;
+            private const int COLORONCOLOR = 3;
 
             [StructLayout(LayoutKind.Sequential)]
             private struct POINT
@@ -360,6 +394,24 @@ namespace ExtentDesktop.Host
                 int nXSrc,
                 int nYSrc,
                 CopyPixelOperation dwRop);
+
+            [DllImport("gdi32.dll", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool StretchBlt(
+                IntPtr hdcDest,
+                int nXDest,
+                int nYDest,
+                int nWidth,
+                int nHeight,
+                IntPtr hdcSrc,
+                int nXSrc,
+                int nYSrc,
+                int nSrcWidth,
+                int nSrcHeight,
+                CopyPixelOperation dwRop);
+
+            [DllImport("gdi32.dll")]
+            private static extern int SetStretchBltMode(IntPtr hdc, int mode);
         }
     }
 }

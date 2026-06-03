@@ -21,6 +21,7 @@ namespace ExtentDesktop.Host
         private string _password;
         private int _port;
         private Func<Rectangle> _captureBoundsProvider;
+        private Func<int> _streamMaxDimensionProvider;
         private Func<string> _captureLabelProvider;
 
         public DisplayHostServer(Action<string> statusCallback, Action<string> clientCallback)
@@ -29,7 +30,7 @@ namespace ExtentDesktop.Host
             _clientCallback = clientCallback;
         }
 
-        public void Start(int port, string password, Func<Rectangle> captureBoundsProvider, Func<string> captureLabelProvider)
+        public void Start(int port, string password, Func<Rectangle> captureBoundsProvider, Func<int> streamMaxDimensionProvider, Func<string> captureLabelProvider)
         {
             if (_running)
             {
@@ -39,6 +40,7 @@ namespace ExtentDesktop.Host
             _password = password ?? string.Empty;
             _port = port;
             _captureBoundsProvider = captureBoundsProvider;
+            _streamMaxDimensionProvider = streamMaxDimensionProvider;
             _captureLabelProvider = captureLabelProvider;
             _listener = new TcpListener(IPAddress.Any, port);
             _listener.Start();
@@ -180,13 +182,18 @@ namespace ExtentDesktop.Host
 
                 _statusCallback("Streaming " + GetCaptureLabel() + " to " + client.Client.RemoteEndPoint + ".");
                 _sessionTokenSource = new CancellationTokenSource();
-                ScreenCaptureStreamer.StreamFrames(stream, writeSync, _sessionTokenSource.Token, 60, _captureBoundsProvider);
+                ScreenCaptureStreamer.StreamFrames(stream, writeSync, _sessionTokenSource.Token, 60, _captureBoundsProvider, GetStreamMaxDimension());
             }
         }
 
         private string GetCaptureLabel()
         {
             return _captureLabelProvider != null ? _captureLabelProvider() : "selected display";
+        }
+
+        private int GetStreamMaxDimension()
+        {
+            return _streamMaxDimensionProvider != null ? _streamMaxDimensionProvider() : 1280;
         }
 
         private static void LogError(Exception ex)

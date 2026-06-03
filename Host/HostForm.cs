@@ -9,6 +9,7 @@ namespace ExtentDesktop.Host
         private readonly TextBox _portTextBox;
         private readonly TextBox _passwordTextBox;
         private readonly ComboBox _displayComboBox;
+        private readonly ComboBox _streamSizeComboBox;
         private readonly Button _refreshButton;
         private readonly Button _startButton;
         private readonly Button _stopButton;
@@ -23,7 +24,7 @@ namespace ExtentDesktop.Host
         {
             Text = "ExtentDesktop Host";
             Width = 620;
-            Height = 470;
+            Height = 500;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -86,6 +87,26 @@ namespace ExtentDesktop.Host
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
 
+            var streamSizeLabel = new Label
+            {
+                Left = 20,
+                Top = 148,
+                Width = 60,
+                Text = "Stream"
+            };
+
+            _streamSizeComboBox = new ComboBox
+            {
+                Left = 82,
+                Top = 144,
+                Width = 354,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            _streamSizeComboBox.Items.Add(new StreamSizeChoice("Performance - max 1280 px", 1280));
+            _streamSizeComboBox.Items.Add(new StreamSizeChoice("Balanced - max 1600 px", 1600));
+            _streamSizeComboBox.Items.Add(new StreamSizeChoice("Native source size", 0));
+            _streamSizeComboBox.SelectedIndex = 0;
+
             _refreshButton = new Button
             {
                 Left = 448,
@@ -117,7 +138,7 @@ namespace ExtentDesktop.Host
             _statusLabel = new Label
             {
                 Left = 20,
-                Top = 156,
+                Top = 186,
                 Width = 410,
                 Height = 20,
                 Text = "Status: Idle."
@@ -126,7 +147,7 @@ namespace ExtentDesktop.Host
             _clientLabel = new Label
             {
                 Left = 20,
-                Top = 182,
+                Top = 212,
                 Width = 410,
                 Height = 20,
                 Text = "Receiver: No receiver connected."
@@ -135,7 +156,7 @@ namespace ExtentDesktop.Host
             _notesTextBox = new TextBox
             {
                 Left = 20,
-                Top = 214,
+                Top = 244,
                 Width = 548,
                 Height = 196,
                 ReadOnly = true,
@@ -150,6 +171,8 @@ namespace ExtentDesktop.Host
             Controls.Add(_passwordTextBox);
             Controls.Add(displayLabel);
             Controls.Add(_displayComboBox);
+            Controls.Add(streamSizeLabel);
+            Controls.Add(_streamSizeComboBox);
             Controls.Add(_refreshButton);
             Controls.Add(_startButton);
             Controls.Add(_stopButton);
@@ -203,7 +226,7 @@ namespace ExtentDesktop.Host
             try
             {
                 _server = new DisplayHostServer(UpdateStatus, UpdateClient);
-                _server.Start(port, _passwordTextBox.Text, GetSelectedCaptureBounds, GetSelectedDisplayLabel);
+                _server.Start(port, _passwordTextBox.Text, GetSelectedCaptureBounds, GetSelectedStreamMaxDimension, GetSelectedDisplayLabel);
 
                 try
                 {
@@ -224,6 +247,7 @@ namespace ExtentDesktop.Host
                 _portTextBox.Enabled = false;
                 _passwordTextBox.Enabled = false;
                 _displayComboBox.Enabled = false;
+                _streamSizeComboBox.Enabled = false;
                 _refreshButton.Enabled = false;
                 UpdateNotes();
             }
@@ -256,6 +280,7 @@ namespace ExtentDesktop.Host
             _portTextBox.Enabled = true;
             _passwordTextBox.Enabled = true;
             _displayComboBox.Enabled = true;
+            _streamSizeComboBox.Enabled = true;
             _refreshButton.Enabled = true;
             _statusLabel.Text = "Status: Stopped.";
             _clientLabel.Text = "Receiver: No receiver connected.";
@@ -344,6 +369,12 @@ namespace ExtentDesktop.Host
             return selected != null ? selected.Label : "All Displays";
         }
 
+        private int GetSelectedStreamMaxDimension()
+        {
+            var selected = _streamSizeComboBox.SelectedItem as StreamSizeChoice;
+            return selected != null ? selected.MaxDimension : 1280;
+        }
+
         private void UpdateNotes()
         {
             var selected = _displayComboBox.SelectedItem as DisplayChoice;
@@ -356,7 +387,8 @@ namespace ExtentDesktop.Host
                 "1. Run this Host on the desktop PC.\r\n" +
                 "2. Run the Receiver app on the laptop and connect to this PC.\r\n" +
                 "3. If you only choose an existing physical screen, the laptop will mirror that screen.\r\n" +
-                "4. If you install a virtual display driver on the desktop PC and it appears in this list, selecting that virtual screen gives you the missing 'third monitor' workflow.\r\n\r\n" +
+                "4. If FPS is low on the Receiver, keep Stream set to Performance or Balanced.\r\n" +
+                "5. If you install a virtual display driver on the desktop PC and it appears in this list, selecting that virtual screen gives you the missing 'third monitor' workflow.\r\n\r\n" +
                 "Important limitation:\r\n" +
                 "Windows cannot create a brand-new extended monitor on the laptop through user-space streaming alone. The desktop PC needs a virtual or indirect display driver first.";
         }
@@ -371,6 +403,23 @@ namespace ExtentDesktop.Host
 
             public string Label { get; private set; }
             public Rectangle Bounds { get; private set; }
+
+            public override string ToString()
+            {
+                return Label;
+            }
+        }
+
+        private sealed class StreamSizeChoice
+        {
+            public StreamSizeChoice(string label, int maxDimension)
+            {
+                Label = label;
+                MaxDimension = maxDimension;
+            }
+
+            public string Label { get; private set; }
+            public int MaxDimension { get; private set; }
 
             public override string ToString()
             {
