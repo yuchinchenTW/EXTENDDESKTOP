@@ -530,22 +530,28 @@ namespace ExtentDesktop.Receiver
                     MFHelpers.Check(outBuffer.Lock(out p, out maxLen, out curLen), "VP out Lock");
                     try
                     {
-                        var bitmap = _bitmapPool != null ? _bitmapPool.Take(_frameWidth, _frameHeight) : new Bitmap(_frameWidth, _frameHeight, PixelFormat.Format32bppRgb);
+                        int displayWidth = _expectedWidth > 0 ? Math.Min(_frameWidth, _expectedWidth) : _frameWidth;
+                        int displayHeight = _expectedHeight > 0 ? Math.Min(_frameHeight, _expectedHeight) : _frameHeight;
+                        if (displayWidth <= 0) displayWidth = _frameWidth;
+                        if (displayHeight <= 0) displayHeight = _frameHeight;
+
+                        var bitmap = _bitmapPool != null ? _bitmapPool.Take(displayWidth, displayHeight) : new Bitmap(displayWidth, displayHeight, PixelFormat.Format32bppRgb);
                         if (_bitmapPool != null) bitmap.Tag = _bitmapPool;
-                        var rect = new Rectangle(0, 0, _frameWidth, _frameHeight);
+                        var rect = new Rectangle(0, 0, displayWidth, displayHeight);
                         var bits = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
                         try
                         {
                             int srcStride = _frameWidth * 4;
-                            if (bits.Stride == srcStride)
+                            int rowBytes = displayWidth * 4;
+                            if (displayWidth == _frameWidth && bits.Stride == srcStride)
                             {
-                                RtlMoveMemory(bits.Scan0, p, (UIntPtr)(srcStride * _frameHeight));
+                                RtlMoveMemory(bits.Scan0, p, (UIntPtr)(srcStride * displayHeight));
                             }
                             else
                             {
-                                for (int y = 0; y < _frameHeight; y++)
+                                for (int y = 0; y < displayHeight; y++)
                                 {
-                                    RtlMoveMemory(IntPtr.Add(bits.Scan0, y * bits.Stride), IntPtr.Add(p, y * srcStride), (UIntPtr)srcStride);
+                                    RtlMoveMemory(IntPtr.Add(bits.Scan0, y * bits.Stride), IntPtr.Add(p, y * srcStride), (UIntPtr)rowBytes);
                                 }
                             }
                         }

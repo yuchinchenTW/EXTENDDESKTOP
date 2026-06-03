@@ -585,7 +585,7 @@ namespace ExtentDesktop.Receiver
 
             protected override void OnPaint(PaintEventArgs pe)
             {
-                pe.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+                pe.Graphics.InterpolationMode = InterpolationMode.Bilinear;
                 pe.Graphics.PixelOffsetMode = PixelOffsetMode.None;
                 pe.Graphics.SmoothingMode = SmoothingMode.None;
                 pe.Graphics.CompositingQuality = CompositingQuality.HighSpeed;

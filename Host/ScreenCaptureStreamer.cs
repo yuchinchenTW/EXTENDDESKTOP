@@ -155,10 +155,10 @@ namespace ExtentDesktop.Host
         private static int ChooseBitrate(int width, int height, int fps)
         {
             long pixelsPerSecond = (long)width * height * fps;
-            double bppFactor = 0.06;
+            double bppFactor = 0.10;
             int bitrate = (int)(pixelsPerSecond * bppFactor);
             if (bitrate < 1500000) bitrate = 1500000;
-            if (bitrate > 12000000) bitrate = 12000000;
+            if (bitrate > 25000000) bitrate = 25000000;
             return bitrate;
         }
 

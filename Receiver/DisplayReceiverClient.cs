@@ -343,58 +343,54 @@ namespace ExtentDesktop.Receiver
             private readonly System.Collections.Generic.Stack<byte[]> _bufferPool = new System.Collections.Generic.Stack<byte[]>();
             private readonly System.Collections.Generic.Stack<FrameData> _frameDataPool = new System.Collections.Generic.Stack<FrameData>();
             private readonly AutoResetEvent _available = new AutoResetEvent(false);
-            private const int MaxDepth = 1;
+            private readonly AutoResetEvent _slotFreed = new AutoResetEvent(false);
+            private const int MaxDepth = 3;
             private const int BufferPoolCapacity = 6;
             private volatile bool _completed;
 
             public void Update(int width, int height, byte[] source, int offset, int length)
             {
-                if (_completed)
+                while (!_completed)
                 {
-                    return;
-                }
-
-                byte[] poolBuf;
-                lock (_sync)
-                {
-                    poolBuf = _bufferPool.Count > 0 ? _bufferPool.Pop() : null;
-                }
-
-                if (poolBuf == null || poolBuf.Length < length)
-                {
-                    poolBuf = new byte[Math.Max(length, 256 * 1024)];
-                }
-
-                Buffer.BlockCopy(source, offset, poolBuf, 0, length);
-
-                lock (_sync)
-                {
-                    if (_completed)
+                    byte[] poolBuf;
+                    lock (_sync)
                     {
+                        poolBuf = _bufferPool.Count > 0 ? _bufferPool.Pop() : null;
+                    }
+
+                    if (poolBuf == null || poolBuf.Length < length)
+                    {
+                        poolBuf = new byte[Math.Max(length, 256 * 1024)];
+                    }
+
+                    Buffer.BlockCopy(source, offset, poolBuf, 0, length);
+
+                    lock (_sync)
+                    {
+                        if (_queue.Count < MaxDepth)
+                        {
+                            FrameData frame;
+                            if (_frameDataPool.Count > 0)
+                            {
+                                frame = _frameDataPool.Pop();
+                            }
+                            else
+                            {
+                                frame = new FrameData();
+                            }
+                            frame.Width = width;
+                            frame.Height = height;
+                            frame.PayloadBuffer = poolBuf;
+                            frame.PayloadLength = length;
+                            _queue.Enqueue(frame);
+                            _available.Set();
+                            return;
+                        }
+
                         ReturnBufferLocked(poolBuf);
-                        return;
                     }
 
-                    while (_queue.Count >= MaxDepth)
-                    {
-                        ReturnFrameLocked(_queue.Dequeue());
-                    }
-
-                    FrameData frame;
-                    if (_frameDataPool.Count > 0)
-                    {
-                        frame = _frameDataPool.Pop();
-                    }
-                    else
-                    {
-                        frame = new FrameData();
-                    }
-                    frame.Width = width;
-                    frame.Height = height;
-                    frame.PayloadBuffer = poolBuf;
-                    frame.PayloadLength = length;
-                    _queue.Enqueue(frame);
-                    _available.Set();
+                    _slotFreed.WaitOne(50);
                 }
             }
 
@@ -409,6 +405,7 @@ namespace ExtentDesktop.Receiver
                         if (_queue.Count > 0)
                         {
                             frame = _queue.Dequeue();
+                            _slotFreed.Set();
                             return true;
                         }
 
@@ -435,18 +432,7 @@ namespace ExtentDesktop.Receiver
             {
                 _completed = true;
                 _available.Set();
-            }
-
-            private void ReturnFrameLocked(FrameData frame)
-            {
-                if (frame == null) return;
-                ReturnBufferLocked(frame.PayloadBuffer);
-                frame.PayloadBuffer = null;
-                frame.PayloadLength = 0;
-                if (_frameDataPool.Count < BufferPoolCapacity)
-                {
-                    _frameDataPool.Push(frame);
-                }
+                _slotFreed.Set();
             }
 
             private void ReturnBufferLocked(byte[] buffer)

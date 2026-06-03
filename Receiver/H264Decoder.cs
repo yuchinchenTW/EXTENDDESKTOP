@@ -622,22 +622,27 @@ namespace ExtentDesktop.Receiver
                 MFHelpers.Check(outBuffer.Lock(out bgraPtr, out bgraMaxLen, out bgraCurLen), "Out.Lock");
                 try
                 {
-                    var bitmap = _bitmapPool != null ? _bitmapPool.Take(width, height) : new Bitmap(width, height, PixelFormat.Format32bppRgb);
+                    int displayWidth = _expectedWidth > 0 ? Math.Min(width, _expectedWidth) : width;
+                    int displayHeight = _expectedHeight > 0 ? Math.Min(height, _expectedHeight) : height;
+                    if (displayWidth <= 0) displayWidth = width;
+                    if (displayHeight <= 0) displayHeight = height;
+
+                    var bitmap = _bitmapPool != null ? _bitmapPool.Take(displayWidth, displayHeight) : new Bitmap(displayWidth, displayHeight, PixelFormat.Format32bppRgb);
                     if (_bitmapPool != null) bitmap.Tag = _bitmapPool;
-                    var rect = new Rectangle(0, 0, width, height);
+                    var rect = new Rectangle(0, 0, displayWidth, displayHeight);
                     var bits = bitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
                     try
                     {
-                        int rowBytes = srcStride;
-                        if (bits.Stride == rowBytes)
+                        int rowBytes = displayWidth * 4;
+                        if (displayWidth == width && bits.Stride == srcStride)
                         {
-                            RtlMoveMemory(bits.Scan0, bgraPtr, (UIntPtr)(rowBytes * height));
+                            RtlMoveMemory(bits.Scan0, bgraPtr, (UIntPtr)(srcStride * displayHeight));
                         }
                         else
                         {
-                            for (int y = 0; y < height; y++)
+                            for (int y = 0; y < displayHeight; y++)
                             {
-                                RtlMoveMemory(IntPtr.Add(bits.Scan0, y * bits.Stride), IntPtr.Add(bgraPtr, y * rowBytes), (UIntPtr)rowBytes);
+                                RtlMoveMemory(IntPtr.Add(bits.Scan0, y * bits.Stride), IntPtr.Add(bgraPtr, y * srcStride), (UIntPtr)rowBytes);
                             }
                         }
                     }
