@@ -19,6 +19,7 @@ namespace ExtentDesktop.Host
 
         private TcpListener _listener;
         private Thread _acceptThread;
+        private readonly object _sessionLock = new object();
         private CancellationTokenSource _sessionTokenSource;
         private volatile bool _running;
         private int _port;
@@ -58,7 +59,13 @@ namespace ExtentDesktop.Host
         public void Dispose()
         {
             _running = false;
-            if (_sessionTokenSource != null) { try { _sessionTokenSource.Cancel(); } catch { } }
+            CancellationTokenSource sessionToCancel = null;
+            lock (_sessionLock)
+            {
+                sessionToCancel = _sessionTokenSource;
+                _sessionTokenSource = null;
+            }
+            if (sessionToCancel != null) { try { sessionToCancel.Cancel(); } catch { } }
             if (_listener != null) { try { _listener.Stop(); } catch { } }
         }
 
@@ -202,6 +209,7 @@ namespace ExtentDesktop.Host
 
         private void HandleWebSocketStream(TcpClient client, NetworkStream stream, Dictionary<string, string> headers, int requestedMaxDimension)
         {
+            var remoteText = client.Client.RemoteEndPoint != null ? client.Client.RemoteEndPoint.ToString() : "unknown";
             string key;
             if (!headers.TryGetValue("Sec-WebSocket-Key", out key))
             {
@@ -220,10 +228,11 @@ namespace ExtentDesktop.Host
             stream.Flush();
 
             stream.ReadTimeout = System.Threading.Timeout.Infinite;
-            _clientCallback("Web client connected from " + client.Client.RemoteEndPoint + ".");
-            _statusCallback("Streaming H.264 to " + client.Client.RemoteEndPoint + ".");
-            MFHelpers.Log("WebStream: WS upgraded for " + client.Client.RemoteEndPoint);
+            _clientCallback("Web client connected from " + remoteText + ".");
+            _statusCallback("Streaming H.264 to " + remoteText + ".");
+            MFHelpers.Log("WebStream: WS upgraded for " + remoteText);
 
+            CancellationTokenSource sessionCts = null;
             try
             {
                 var bounds = _captureBoundsProvider != null ? _captureBoundsProvider() : SystemInformation.VirtualScreen;
@@ -238,28 +247,56 @@ namespace ExtentDesktop.Host
                 SendWebSocketText(stream, configMsg);
                 MFHelpers.Log("WebStream: config sent " + encodedWidth + "x" + encodedHeight + " maxDim=" + maxDim);
 
-                var sessionCts = new CancellationTokenSource();
-                _sessionTokenSource = sessionCts;
+                sessionCts = new CancellationTokenSource();
+                CancellationTokenSource previousSession = null;
+                lock (_sessionLock)
+                {
+                    previousSession = _sessionTokenSource;
+                    _sessionTokenSource = sessionCts;
+                }
+                if (previousSession != null)
+                {
+                    try
+                    {
+                        MFHelpers.Log("WebStream: canceling previous web session for " + remoteText);
+                        previousSession.Cancel();
+                    }
+                    catch { }
+                }
+
                 var token = sessionCts.Token;
                 var writeSync = new object();
 
-                StartReaderThread(stream, sessionCts, writeSync);
+                StartReaderThread(stream, sessionCts, writeSync, remoteText);
 
-                WebSocketStreamFrames(stream, token, 60, encodedWidth, encodedHeight, writeSync);
+                WebSocketStreamFrames(stream, token, 60, encodedWidth, encodedHeight, writeSync, remoteText);
             }
             catch (Exception ex)
             {
-                MFHelpers.Log("WebStream session ended: " + ex.GetType().Name + ": " + ex.Message);
+                MFHelpers.Log("WebStream session ended for " + remoteText + ": " + ex.GetType().Name + ": " + ex.Message);
             }
             finally
             {
+                if (sessionCts != null)
+                {
+                    try { sessionCts.Cancel(); } catch { }
+                    lock (_sessionLock)
+                    {
+                        if (object.ReferenceEquals(_sessionTokenSource, sessionCts))
+                        {
+                            _sessionTokenSource = null;
+                        }
+                    }
+                    try { sessionCts.Dispose(); } catch { }
+                }
                 try { client.Close(); } catch { }
+                MFHelpers.Log("WebStream: session closed for " + remoteText);
                 _clientCallback("No web client connected.");
                 if (_running) _statusCallback("Web stream listening on http://<host>:" + _port + "/");
             }
         }
 
-        private void StartReaderThread(NetworkStream stream, CancellationTokenSource sessionCts, object writeSync)
+        private void StartReaderThread(NetworkStream stream, CancellationTokenSource sessionCts, object writeSync, string remoteText)
         {
             var t = new Thread(() =>
             {
@@ -267,10 +304,18 @@ namespace ExtentDesktop.Host
                 {
                     while (!sessionCts.IsCancellationRequested)
                     {
-                        if (!ReadAndHandleWebSocketFrame(stream, writeSync)) break;
+                        string reason;
+                        if (!ReadAndHandleWebSocketFrame(stream, writeSync, out reason))
+                        {
+                            MFHelpers.Log("WebStream reader stopped for " + remoteText + ": " + reason);
+                            break;
+                        }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    MFHelpers.Log("WebStream reader error for " + remoteText + ": " + ex.GetType().Name + ": " + ex.Message);
+                }
                 finally
                 {
                     try { sessionCts.Cancel(); } catch { }
@@ -282,10 +327,15 @@ namespace ExtentDesktop.Host
         }
 
         private static int _frameLogCount = 0;
-        private static bool ReadAndHandleWebSocketFrame(NetworkStream stream, object writeSync)
+        private static bool ReadAndHandleWebSocketFrame(NetworkStream stream, object writeSync, out string reason)
         {
+            reason = "unknown";
             byte[] header = new byte[2];
-            if (!ReadFull(stream, header, 0, 2)) return false;
+            if (!ReadFull(stream, header, 0, 2))
+            {
+                reason = "header read ended";
+                return false;
+            }
 
             bool fin = (header[0] & 0x80) != 0;
             int opcode = header[0] & 0x0F;
@@ -300,13 +350,21 @@ namespace ExtentDesktop.Host
             if (payloadLen == 126)
             {
                 byte[] ext = new byte[2];
-                if (!ReadFull(stream, ext, 0, 2)) return false;
+                if (!ReadFull(stream, ext, 0, 2))
+                {
+                    reason = "short extended length";
+                    return false;
+                }
                 payloadLen = (ext[0] << 8) | ext[1];
             }
             else if (payloadLen == 127)
             {
                 byte[] ext = new byte[8];
-                if (!ReadFull(stream, ext, 0, 8)) return false;
+                if (!ReadFull(stream, ext, 0, 8))
+                {
+                    reason = "short extended length64";
+                    return false;
+                }
                 payloadLen = 0;
                 for (int i = 0; i < 8; i++) payloadLen = (payloadLen << 8) | ext[i];
             }
@@ -315,15 +373,27 @@ namespace ExtentDesktop.Host
             if (masked)
             {
                 mask = new byte[4];
-                if (!ReadFull(stream, mask, 0, 4)) return false;
+                if (!ReadFull(stream, mask, 0, 4))
+                {
+                    reason = "short mask";
+                    return false;
+                }
             }
 
             byte[] payload = null;
             if (payloadLen > 0)
             {
-                if (payloadLen > 16 * 1024 * 1024) return false;
+                if (payloadLen > 16 * 1024 * 1024)
+                {
+                    reason = "payload too large";
+                    return false;
+                }
                 payload = new byte[payloadLen];
-                if (!ReadFull(stream, payload, 0, (int)payloadLen)) return false;
+                if (!ReadFull(stream, payload, 0, (int)payloadLen))
+                {
+                    reason = "short payload";
+                    return false;
+                }
                 if (masked)
                 {
                     for (int i = 0; i < payload.Length; i++) payload[i] ^= mask[i & 3];
@@ -336,6 +406,7 @@ namespace ExtentDesktop.Host
                 {
                     SendWebSocketFrame(stream, 0x8, payload ?? new byte[0], 0, payload != null ? payload.Length : 0);
                 }
+                reason = "client close frame len=" + payloadLen;
                 return false;
             }
             if (opcode == 0x9)
@@ -362,7 +433,7 @@ namespace ExtentDesktop.Host
             return true;
         }
 
-        private void WebSocketStreamFrames(NetworkStream stream, CancellationToken token, int fps, int encodedWidth, int encodedHeight, object writeSync)
+        private void WebSocketStreamFrames(NetworkStream stream, CancellationToken token, int fps, int encodedWidth, int encodedHeight, object writeSync, string remoteText)
         {
             var bitrate = ChooseBitrate(encodedWidth, encodedHeight, fps);
 
@@ -447,7 +518,7 @@ namespace ExtentDesktop.Host
                                 }
                                 catch (Exception sendEx)
                                 {
-                                    MFHelpers.Log("WebStream send failed: " + sendEx.Message);
+                                    MFHelpers.Log("WebStream send failed for " + remoteText + ": " + sendEx.GetType().Name + ": " + sendEx.Message);
                                     return;
                                 }
                             } while (true);
@@ -508,6 +579,7 @@ namespace ExtentDesktop.Host
             }
             finally
             {
+                MFHelpers.Log("WebStream frame loop stopped for " + remoteText + " canceled=" + token.IsCancellationRequested);
                 if (hwEnc != null) try { hwEnc.Dispose(); } catch { }
                 if (swEnc != null) try { swEnc.Dispose(); } catch { }
             }

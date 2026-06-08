@@ -78,6 +78,7 @@
   ctx.imageSmoothingEnabled = false;
   const statusEl = document.getElementById('status');
   const fpsEl = document.getElementById('fps');
+  const clientVersion = 'web-20260608-1510';
 
   function updateLayout() {
     const ww = window.innerWidth;
@@ -209,7 +210,7 @@
     const drawFps = fps(frameCount);
     const rafFps = fps(rafCount);
     const maxText = currentMaxDimension > 0 ? currentMaxDimension : 'host';
-    fpsEl.textContent = 'recv ' + recvFps + '\ndec  ' + decFps + '\ndraw ' + drawFps + '\nraf  ' + rafFps + '\nmax  ' + maxText + '\nqmax ' + queueMax;
+    fpsEl.textContent = clientVersion + '\nrecv ' + recvFps + '\ndec  ' + decFps + '\ndraw ' + drawFps + '\nraf  ' + rafFps + '\nmax  ' + maxText + '\nqmax ' + queueMax;
     recvCount = 0;
     decodeCount = 0;
     frameCount = 0;
@@ -271,7 +272,9 @@
 
     decoder.configure({
       codec: 'avc1.640032',
-      optimizeForLatency: true
+      optimizeForLatency: true,
+      hardwareAcceleration: 'prefer-hardware',
+      latencyMode: 'realtime'
     });
     configured = true;
     waitForKeyframe = true;
@@ -282,7 +285,7 @@
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const maxDim = currentMaxDimension;
     const wsUrl = proto + '//' + location.host + '/stream' + (maxDim > 0 ? '?max=' + maxDim : '');
-    setStatus('Connecting to ' + wsUrl, true);
+    setStatus(clientVersion + ' connecting to ' + wsUrl, true);
 
     const ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
@@ -335,10 +338,13 @@
 
     ws.onerror = (err) => {
       console.error('WebSocket error', err);
+      setStatus('WebSocket error', true);
     };
 
-    ws.onclose = () => {
-      setStatus('Disconnected. Reconnecting in 2s...', true);
+    ws.onclose = (e) => {
+      const code = e && typeof e.code === 'number' ? e.code : 0;
+      const reason = e && e.reason ? ' ' + e.reason : '';
+      setStatus('Disconnected code ' + code + reason + '. Reconnecting in 2s...', true);
       resetDecoder();
       setTimeout(connect, 2000);
     };
@@ -346,9 +352,9 @@
 
   function getWebMaxDimension() {
     const raw = params.get('max');
-    if (raw === null) return 1024;
+    if (raw === null) return 720;
     const value = Number(raw);
-    if (!Number.isFinite(value)) return 1024;
+    if (!Number.isFinite(value)) return 720;
     return Math.max(0, Math.min(3840, Math.round(value)));
   }
 
