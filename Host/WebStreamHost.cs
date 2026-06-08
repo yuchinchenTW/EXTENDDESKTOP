@@ -131,7 +131,7 @@ namespace ExtentDesktop.Host
                 }
                 else if (path == "/" || path == "/index.html")
                 {
-                    SendHttpResponse(stream, "200 OK", "text/html; charset=utf-8", _indexHtml);
+                    SendHttpResponse(stream, "200 OK", "text/html; charset=utf-8", GetIndexHtmlBytes());
                     client.Close();
                 }
                 else
@@ -171,13 +171,33 @@ namespace ExtentDesktop.Host
             var header = "HTTP/1.1 " + status + "\r\n" +
                          "Content-Type: " + contentType + "\r\n" +
                          "Content-Length: " + body.Length + "\r\n" +
-                         "Cache-Control: no-cache\r\n" +
+                         "Cache-Control: no-store, no-cache, must-revalidate, max-age=0\r\n" +
+                         "Pragma: no-cache\r\n" +
+                         "Expires: 0\r\n" +
                          "Connection: close\r\n" +
                          "\r\n";
             var headerBytes = Encoding.ASCII.GetBytes(header);
             stream.Write(headerBytes, 0, headerBytes.Length);
             stream.Write(body, 0, body.Length);
             stream.Flush();
+        }
+
+        private byte[] GetIndexHtmlBytes()
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                var path = Path.Combine(dir, "web", "index.html");
+                if (File.Exists(path))
+                {
+                    return File.ReadAllBytes(path);
+                }
+            }
+            catch
+            {
+            }
+
+            return _indexHtml ?? Encoding.UTF8.GetBytes("Not Found");
         }
 
         private void HandleWebSocketStream(TcpClient client, NetworkStream stream, Dictionary<string, string> headers, int requestedMaxDimension)
