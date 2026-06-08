@@ -9,6 +9,7 @@ namespace ExtentDesktop.Host
         private readonly int _width;
         private readonly int _height;
         private readonly int _fps;
+        private readonly int _bitrate;
         private readonly long _frameDurationTicks;
 
         private IMFTransform _encoder;
@@ -47,6 +48,7 @@ namespace ExtentDesktop.Host
             _width = width;
             _height = height;
             _fps = fps;
+            _bitrate = bitrate;
             _frameDurationTicks = 10000000L / fps;
 
             MFHelpers.Check(MFNative.MFStartup(MFConstants.MF_VERSION, MFConstants.MFSTARTUP_LITE), "MFStartup");
@@ -55,6 +57,7 @@ namespace ExtentDesktop.Host
             {
                 CreateD3DDevice();
                 ActivateHwEncoder(bitrate);
+                ConfigureCodecApi();
                 ActivateColorConverter();
                 AllocateBuffers();
                 StartStreaming();
@@ -335,6 +338,71 @@ namespace ExtentDesktop.Host
             ConfigureEncoderTypes(bitrate);
 
             _encoderEvents = (IMFMediaEventGenerator)_encoder;
+        }
+
+        private void ConfigureCodecApi()
+        {
+            try
+            {
+                var codecApi = _encoder as ICodecAPI;
+                if (codecApi == null)
+                {
+                    return;
+                }
+
+                var lowLatencyKey = MFGuids.CODECAPI_AVLowLatencyMode;
+                var rateModeKey = MFGuids.CODECAPI_AVEncCommonRateControlMode;
+                var meanBitrateKey = MFGuids.CODECAPI_AVEncCommonMeanBitRate;
+                var gopKey = MFGuids.CODECAPI_AVEncMPVGOPSize;
+                var bFramesKey = MFGuids.CODECAPI_AVEncMPVDefaultBPictureCount;
+                var threadsKey = MFGuids.CODECAPI_AVEncNumWorkerThreads;
+
+                SetVariantBool(codecApi, ref lowLatencyKey, true);
+                SetVariantUInt32(codecApi, ref bFramesKey, 0);
+                SetVariantUInt32(codecApi, ref rateModeKey, (uint)MFConstants.eAVEncCommonRateControlMode_CBR);
+                SetVariantUInt32(codecApi, ref meanBitrateKey, (uint)_bitrate);
+                SetVariantUInt32(codecApi, ref gopKey, (uint)_fps);
+                SetVariantUInt32(codecApi, ref threadsKey, 0);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void SetVariantBool(ICodecAPI api, ref Guid key, bool value)
+        {
+            var pv = new PROPVARIANT_BOOL();
+            pv.vt = (ushort)VarEnum.VT_BOOL;
+            pv.boolVal = value ? unchecked((short)0xFFFF) : (short)0;
+            int size = Marshal.SizeOf(typeof(PROPVARIANT_BOOL));
+            IntPtr buf = Marshal.AllocHGlobal(size);
+            try
+            {
+                Marshal.StructureToPtr(pv, buf, false);
+                api.SetValue(ref key, buf);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buf);
+            }
+        }
+
+        private static void SetVariantUInt32(ICodecAPI api, ref Guid key, uint value)
+        {
+            var pv = new PROPVARIANT_UI4();
+            pv.vt = (ushort)VarEnum.VT_UI4;
+            pv.ulVal = value;
+            int size = Marshal.SizeOf(typeof(PROPVARIANT_UI4));
+            IntPtr buf = Marshal.AllocHGlobal(size);
+            try
+            {
+                Marshal.StructureToPtr(pv, buf, false);
+                api.SetValue(ref key, buf);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buf);
+            }
         }
 
         private void ConfigureEncoderTypes(int bitrate)

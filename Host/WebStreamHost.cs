@@ -113,13 +113,21 @@ namespace ExtentDesktop.Host
                 var parts = requestLine.Split(' ');
                 if (parts.Length < 2) { client.Close(); return; }
                 var path = parts[1];
+                var query = "";
+                int queryIndex = path.IndexOf('?');
+                if (queryIndex >= 0)
+                {
+                    query = path.Substring(queryIndex + 1);
+                    path = path.Substring(0, queryIndex);
+                }
+                int requestedMaxDimension = ParseRequestedMaxDimension(query);
 
                 string upgrade;
                 bool isWebSocket = headers.TryGetValue("Upgrade", out upgrade) && string.Equals(upgrade, "websocket", StringComparison.OrdinalIgnoreCase);
 
                 if (isWebSocket && path == "/stream")
                 {
-                    HandleWebSocketStream(client, stream, headers);
+                    HandleWebSocketStream(client, stream, headers, requestedMaxDimension);
                 }
                 else if (path == "/" || path == "/index.html")
                 {
@@ -172,7 +180,7 @@ namespace ExtentDesktop.Host
             stream.Flush();
         }
 
-        private void HandleWebSocketStream(TcpClient client, NetworkStream stream, Dictionary<string, string> headers)
+        private void HandleWebSocketStream(TcpClient client, NetworkStream stream, Dictionary<string, string> headers, int requestedMaxDimension)
         {
             string key;
             if (!headers.TryGetValue("Sec-WebSocket-Key", out key))
@@ -203,7 +211,7 @@ namespace ExtentDesktop.Host
 
                 int encodedWidth;
                 int encodedHeight;
-                int maxDim = GetStreamMaxDimension();
+                int maxDim = ResolveWebMaxDimension(GetStreamMaxDimension(), requestedMaxDimension);
                 ResolveEncodedSize(bounds, maxDim, out encodedWidth, out encodedHeight);
 
                 var configMsg = "{\"type\":\"config\",\"width\":" + encodedWidth + ",\"height\":" + encodedHeight + "}";
@@ -491,6 +499,52 @@ namespace ExtentDesktop.Host
             return maxDim < 0 ? 0 : maxDim;
         }
 
+        private static int ResolveWebMaxDimension(int hostMaxDimension, int requestedMaxDimension)
+        {
+            if (requestedMaxDimension <= 0)
+            {
+                return hostMaxDimension;
+            }
+
+            return hostMaxDimension > 0 ? Math.Min(hostMaxDimension, requestedMaxDimension) : requestedMaxDimension;
+        }
+
+        private static int ParseRequestedMaxDimension(string query)
+        {
+            if (string.IsNullOrEmpty(query))
+            {
+                return 0;
+            }
+
+            var parts = query.Split('&');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                var pair = parts[i];
+                int eq = pair.IndexOf('=');
+                if (eq <= 0)
+                {
+                    continue;
+                }
+
+                var key = Uri.UnescapeDataString(pair.Substring(0, eq));
+                if (!string.Equals(key, "max", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(key, "maxDim", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                int value;
+                if (int.TryParse(Uri.UnescapeDataString(pair.Substring(eq + 1)), out value))
+                {
+                    if (value < 0) return 0;
+                    if (value > 3840) return 3840;
+                    return value;
+                }
+            }
+
+            return 0;
+        }
+
         private static void ResolveEncodedSize(Rectangle bounds, int maxDim, out int encodedWidth, out int encodedHeight)
         {
             if (maxDim > 0 && (bounds.Width > maxDim || bounds.Height > maxDim))
@@ -571,7 +625,6 @@ namespace ExtentDesktop.Host
 
             stream.Write(header, 0, header.Length);
             stream.Write(data, offset, length);
-            stream.Flush();
         }
 
         private sealed class GdiBgraCapturer : IDisposable

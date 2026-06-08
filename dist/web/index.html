@@ -174,13 +174,15 @@
   let recvCount = 0;
   let decodeCount = 0;
   let lastFpsTime = performance.now();
-  let pendingFrame = null;
+  let rafCount = 0;
+  let pendingFrames = [];
   let chunkTimestamp = 0;
   let queueMax = 0;
+  const maxPendingFrames = 2;
 
   function renderLoop() {
-    const f = pendingFrame;
-    pendingFrame = null;
+    rafCount++;
+    const f = pendingFrames.shift();
     if (f) {
       try {
         ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
@@ -196,10 +198,15 @@
   requestAnimationFrame(renderLoop);
 
   setInterval(() => {
-    fpsEl.textContent = 'recv ' + recvCount + '\ndec  ' + decodeCount + '\ndraw ' + frameCount + '\nqmax ' + queueMax;
+    const now = performance.now();
+    const elapsed = Math.max(0.001, (now - lastFpsTime) / 1000);
+    lastFpsTime = now;
+    const fps = (value) => Math.round(value / elapsed);
+    fpsEl.textContent = 'recv ' + fps(recvCount) + '\ndec  ' + fps(decodeCount) + '\ndraw ' + fps(frameCount) + '\nraf  ' + fps(rafCount) + '\nqmax ' + queueMax;
     recvCount = 0;
     decodeCount = 0;
     frameCount = 0;
+    rafCount = 0;
     queueMax = 0;
   }, 1000);
 
@@ -241,10 +248,11 @@
     decoder = new VideoDecoder({
       output: (frame) => {
         decodeCount++;
-        if (pendingFrame) {
-          try { pendingFrame.close(); } catch (e) {}
+        pendingFrames.push(frame);
+        while (pendingFrames.length > maxPendingFrames) {
+          const stale = pendingFrames.shift();
+          try { stale.close(); } catch (e) {}
         }
-        pendingFrame = frame;
       },
       error: (err) => {
         console.error('Decoder error:', err);
@@ -265,7 +273,8 @@
 
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = proto + '//' + location.host + '/stream';
+    const maxDim = getWebMaxDimension();
+    const wsUrl = proto + '//' + location.host + '/stream' + (maxDim > 0 ? '?max=' + maxDim : '');
     setStatus('Connecting to ' + wsUrl, true);
 
     const ws = new WebSocket(wsUrl);
@@ -325,16 +334,28 @@
       setStatus('Disconnected. Reconnecting in 2s...', true);
       configured = false;
       waitForKeyframe = true;
-      if (pendingFrame) {
-        try { pendingFrame.close(); } catch (e) {}
-        pendingFrame = null;
-      }
+      closePendingFrames();
       if (decoder) {
         try { decoder.close(); } catch (e) {}
         decoder = null;
       }
       setTimeout(connect, 2000);
     };
+  }
+
+  function getWebMaxDimension() {
+    const params = new URLSearchParams(location.search);
+    const raw = params.get('max');
+    const value = raw === null ? 1024 : Number(raw);
+    if (!Number.isFinite(value)) return 1024;
+    return Math.max(0, Math.min(3840, Math.round(value)));
+  }
+
+  function closePendingFrames() {
+    while (pendingFrames.length > 0) {
+      const f = pendingFrames.shift();
+      try { f.close(); } catch (e) {}
+    }
   }
 
   if (typeof VideoDecoder === 'undefined') {
