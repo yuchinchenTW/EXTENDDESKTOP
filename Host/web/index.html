@@ -174,11 +174,21 @@
   let recvCount = 0;
   let decodeCount = 0;
   let lastFpsTime = performance.now();
+  let videoStartedAt = 0;
   let rafCount = 0;
   let pendingFrames = [];
   let chunkTimestamp = 0;
   let queueMax = 0;
+  let activeWs = null;
+  let reconnectTimer = null;
+  let lowStreamSeconds = 0;
   const maxPendingFrames = 2;
+  const params = new URLSearchParams(location.search);
+  const fixedMaxRaw = params.get('max');
+  const adaptiveScale = fixedMaxRaw === null && params.get('auto') !== '0';
+  const adaptiveMaxSteps = [1024, 864, 720, 640];
+  let adaptiveStep = 0;
+  let currentMaxDimension = getInitialWebMaxDimension();
 
   function renderLoop() {
     rafCount++;
@@ -202,7 +212,13 @@
     const elapsed = Math.max(0.001, (now - lastFpsTime) / 1000);
     lastFpsTime = now;
     const fps = (value) => Math.round(value / elapsed);
-    fpsEl.textContent = 'recv ' + fps(recvCount) + '\ndec  ' + fps(decodeCount) + '\ndraw ' + fps(frameCount) + '\nraf  ' + fps(rafCount) + '\nqmax ' + queueMax;
+    const recvFps = fps(recvCount);
+    const decFps = fps(decodeCount);
+    const drawFps = fps(frameCount);
+    const rafFps = fps(rafCount);
+    const maxText = currentMaxDimension > 0 ? currentMaxDimension : 'host';
+    fpsEl.textContent = 'recv ' + recvFps + '\ndec  ' + decFps + '\ndraw ' + drawFps + '\nraf  ' + rafFps + '\nmax  ' + maxText + '\nqmax ' + queueMax;
+    updateAdaptiveScale(recvFps, decFps, drawFps, rafFps, queueMax);
     recvCount = 0;
     decodeCount = 0;
     frameCount = 0;
@@ -268,16 +284,22 @@
     });
     configured = true;
     waitForKeyframe = true;
+    videoStartedAt = 0;
     setStatus('Decoder ready ' + width + 'x' + height);
   }
 
   function connect() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const maxDim = getWebMaxDimension();
+    const maxDim = currentMaxDimension;
     const wsUrl = proto + '//' + location.host + '/stream' + (maxDim > 0 ? '?max=' + maxDim : '');
     setStatus('Connecting to ' + wsUrl, true);
 
     const ws = new WebSocket(wsUrl);
+    activeWs = ws;
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
@@ -309,6 +331,7 @@
       if (waitForKeyframe) {
         if (!isKey) return;
         waitForKeyframe = false;
+        videoStartedAt = performance.now();
         statusEl.classList.add('hidden');
       }
 
@@ -331,24 +354,71 @@
     };
 
     ws.onclose = () => {
-      setStatus('Disconnected. Reconnecting in 2s...', true);
-      configured = false;
-      waitForKeyframe = true;
-      closePendingFrames();
-      if (decoder) {
-        try { decoder.close(); } catch (e) {}
-        decoder = null;
+      if (activeWs !== ws) {
+        return;
       }
-      setTimeout(connect, 2000);
+      activeWs = null;
+      setStatus('Disconnected. Reconnecting in 2s...', true);
+      resetDecoder();
+      reconnectTimer = setTimeout(connect, 2000);
     };
   }
 
-  function getWebMaxDimension() {
-    const params = new URLSearchParams(location.search);
-    const raw = params.get('max');
-    const value = raw === null ? 1024 : Number(raw);
-    if (!Number.isFinite(value)) return 1024;
+  function getInitialWebMaxDimension() {
+    if (fixedMaxRaw === null) return adaptiveMaxSteps[0];
+    const value = Number(fixedMaxRaw);
+    if (!Number.isFinite(value)) return adaptiveMaxSteps[0];
     return Math.max(0, Math.min(3840, Math.round(value)));
+  }
+
+  function updateAdaptiveScale(recvFps, decFps, drawFps, rafFps, qmax) {
+    if (!adaptiveScale || !configured || waitForKeyframe || videoStartedAt === 0) return;
+    if (performance.now() - videoStartedAt < 5000) return;
+
+    if (rafFps < 54) {
+      lowStreamSeconds = 0;
+      return;
+    }
+
+    const streamFps = Math.min(recvFps, decFps, drawFps);
+    if (streamFps < 54 || qmax > 3) {
+      lowStreamSeconds++;
+    } else {
+      lowStreamSeconds = 0;
+    }
+
+    if (lowStreamSeconds >= 2 && adaptiveStep < adaptiveMaxSteps.length - 1) {
+      adaptiveStep++;
+      currentMaxDimension = adaptiveMaxSteps[adaptiveStep];
+      lowStreamSeconds = 0;
+      reconnectNow('Auto stream max ' + currentMaxDimension);
+    }
+  }
+
+  function reconnectNow(message) {
+    setStatus(message, true);
+    const ws = activeWs;
+    activeWs = null;
+    if (ws) {
+      ws.onclose = null;
+      try { ws.close(); } catch (e) {}
+    }
+    resetDecoder();
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+    }
+    reconnectTimer = setTimeout(connect, 250);
+  }
+
+  function resetDecoder() {
+    configured = false;
+    waitForKeyframe = true;
+    videoStartedAt = 0;
+    closePendingFrames();
+    if (decoder) {
+      try { decoder.close(); } catch (e) {}
+      decoder = null;
+    }
   }
 
   function closePendingFrames() {
