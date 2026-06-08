@@ -185,7 +185,7 @@
   const maxPendingFrames = 2;
   const params = new URLSearchParams(location.search);
   const fixedMaxRaw = params.get('max');
-  const adaptiveScale = fixedMaxRaw === null && params.get('auto') !== '0';
+  const adaptiveScale = fixedMaxRaw === null && params.get('auto') === '1';
   const adaptiveMaxSteps = [1024, 864, 720, 640];
   let adaptiveStep = 0;
   let currentMaxDimension = getInitialWebMaxDimension();
