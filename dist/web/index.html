@@ -74,7 +74,8 @@
 (function () {
   const canvas = document.getElementById('canvas');
   const wrap = document.getElementById('wrap');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+  ctx.imageSmoothingEnabled = false;
   const statusEl = document.getElementById('status');
   const fpsEl = document.getElementById('fps');
 
@@ -174,24 +175,32 @@
   let decodeCount = 0;
   let lastFpsTime = performance.now();
   let pendingFrame = null;
-  let rafScheduled = false;
+  let chunkTimestamp = 0;
+  let queueMax = 0;
 
-  function drawPendingFrame() {
-    rafScheduled = false;
+  function renderLoop() {
     const f = pendingFrame;
     pendingFrame = null;
     if (f) {
-      ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
-      f.close();
-      frameCount++;
+      try {
+        ctx.drawImage(f, 0, 0, canvas.width, canvas.height);
+        frameCount++;
+      } catch (e) {
+        console.error('drawImage', e);
+      } finally {
+        f.close();
+      }
     }
+    requestAnimationFrame(renderLoop);
   }
+  requestAnimationFrame(renderLoop);
 
   setInterval(() => {
-    fpsEl.textContent = 'recv ' + recvCount + '\ndec  ' + decodeCount + '\ndraw ' + frameCount;
+    fpsEl.textContent = 'recv ' + recvCount + '\ndec  ' + decodeCount + '\ndraw ' + frameCount + '\nqmax ' + queueMax;
     recvCount = 0;
     decodeCount = 0;
     frameCount = 0;
+    queueMax = 0;
   }, 1000);
 
   function setStatus(text, persist) {
@@ -225,18 +234,17 @@
   function initDecoder(width, height) {
     canvas.width = width;
     canvas.height = height;
+    ctx.imageSmoothingEnabled = false;
+    chunkTimestamp = 0;
     updateLayout();
 
     decoder = new VideoDecoder({
       output: (frame) => {
         decodeCount++;
-        try {
-          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
-          frameCount++;
-        } catch (e) {
-          console.error('drawImage', e);
+        if (pendingFrame) {
+          try { pendingFrame.close(); } catch (e) {}
         }
-        frame.close();
+        pendingFrame = frame;
       },
       error: (err) => {
         console.error('Decoder error:', err);
@@ -283,6 +291,9 @@
       if (!configured || !decoder) return;
 
       recvCount++;
+      if (typeof decoder.decodeQueueSize === 'number') {
+        queueMax = Math.max(queueMax, decoder.decodeQueueSize);
+      }
       const data = new Uint8Array(e.data);
       const isKey = isKeyframe(data);
 
@@ -293,9 +304,10 @@
       }
 
       try {
+        chunkTimestamp += 16667;
         const chunk = new EncodedVideoChunk({
           type: isKey ? 'key' : 'delta',
-          timestamp: performance.now() * 1000,
+          timestamp: chunkTimestamp,
           data: data
         });
         decoder.decode(chunk);

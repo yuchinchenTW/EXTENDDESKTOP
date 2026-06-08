@@ -234,7 +234,7 @@ namespace ExtentDesktop.Host
                     if (indexHtml != null)
                     {
                         _webServer = new WebStreamHost(UpdateStatus, UpdateClient);
-                        _webServer.Start(port + 1, indexHtml, GetSelectedCaptureBounds, GetSelectedDisplayLabel);
+                        _webServer.Start(port + 1, indexHtml, GetSelectedCaptureBounds, GetSelectedStreamMaxDimension, GetSelectedDisplayLabel);
                     }
                 }
                 catch (Exception webEx)

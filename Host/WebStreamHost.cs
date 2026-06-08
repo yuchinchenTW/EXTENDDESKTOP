@@ -25,6 +25,7 @@ namespace ExtentDesktop.Host
         private byte[] _indexHtml;
         private Func<Rectangle> _captureBoundsProvider;
         private Func<string> _captureLabelProvider;
+        private Func<int> _streamMaxDimensionProvider;
 
         public WebStreamHost(Action<string> statusCallback, Action<string> clientCallback)
         {
@@ -32,13 +33,14 @@ namespace ExtentDesktop.Host
             _clientCallback = clientCallback;
         }
 
-        public void Start(int port, byte[] indexHtml, Func<Rectangle> captureBoundsProvider, Func<string> captureLabelProvider)
+        public void Start(int port, byte[] indexHtml, Func<Rectangle> captureBoundsProvider, Func<int> streamMaxDimensionProvider, Func<string> captureLabelProvider)
         {
             if (_running) return;
 
             _port = port;
             _indexHtml = indexHtml;
             _captureBoundsProvider = captureBoundsProvider;
+            _streamMaxDimensionProvider = streamMaxDimensionProvider;
             _captureLabelProvider = captureLabelProvider;
 
             _listener = new TcpListener(IPAddress.Any, port);
@@ -201,22 +203,12 @@ namespace ExtentDesktop.Host
 
                 int encodedWidth;
                 int encodedHeight;
-                const int maxDim = 1280;
-                if (bounds.Width <= maxDim && bounds.Height <= maxDim)
-                {
-                    encodedWidth = bounds.Width & ~1;
-                    encodedHeight = bounds.Height & ~1;
-                }
-                else
-                {
-                    double scale = Math.Min((double)maxDim / bounds.Width, (double)maxDim / bounds.Height);
-                    encodedWidth = ((int)Math.Round(bounds.Width * scale)) & ~1;
-                    encodedHeight = ((int)Math.Round(bounds.Height * scale)) & ~1;
-                }
+                int maxDim = GetStreamMaxDimension();
+                ResolveEncodedSize(bounds, maxDim, out encodedWidth, out encodedHeight);
 
                 var configMsg = "{\"type\":\"config\",\"width\":" + encodedWidth + ",\"height\":" + encodedHeight + "}";
                 SendWebSocketText(stream, configMsg);
-                MFHelpers.Log("WebStream: config sent " + encodedWidth + "x" + encodedHeight);
+                MFHelpers.Log("WebStream: config sent " + encodedWidth + "x" + encodedHeight + " maxDim=" + maxDim);
 
                 var sessionCts = new CancellationTokenSource();
                 _sessionTokenSource = sessionCts;
@@ -369,6 +361,14 @@ namespace ExtentDesktop.Host
                     int sentCount = 0;
                     long freq = System.Diagnostics.Stopwatch.Frequency;
                     int slowLogCount = 0;
+                    long statsStartTicks = watch.ElapsedTicks;
+                    int statsLogCount = 0;
+                    int statsCapCount = 0;
+                    int statsSentCount = 0;
+                    long statsCapTicks = 0;
+                    long statsEncTicks = 0;
+                    long statsSendTicks = 0;
+                    string encoderName = hwEnc != null ? "HW" : "SW";
 
                     while (!token.IsCancellationRequested)
                     {
@@ -389,6 +389,9 @@ namespace ExtentDesktop.Host
                                 capturer.UnlockCaptured();
                             }
                             tEnc = watch.ElapsedTicks;
+                            statsCapCount++;
+                            statsCapTicks += tCap - t0;
+                            statsEncTicks += tEnc - tCap;
 
                             byte[] outputBytes;
                             int outputLen;
@@ -407,6 +410,7 @@ namespace ExtentDesktop.Host
                                     {
                                         SendWebSocketBinary(stream, outputBytes, 0, outputLen);
                                     }
+                                    statsSentCount++;
                                     if (sentCount < 5)
                                     {
                                         sentCount++;
@@ -421,6 +425,7 @@ namespace ExtentDesktop.Host
                             } while (true);
 
                             long tSend = watch.ElapsedTicks;
+                            statsSendTicks += tSend - tEnc;
                             long totalMs = (tSend - t0) * 1000L / freq;
                             if (totalMs > 25 && slowLogCount < 30)
                             {
@@ -430,6 +435,33 @@ namespace ExtentDesktop.Host
                                 long sendMs = (tSend - tEnc) * 1000L / freq;
                                 MFHelpers.Log("WebStream SLOW total=" + totalMs + " cap=" + capMs + " enc=" + encMs + " send=" + sendMs);
                             }
+                        }
+
+                        long statsNowTicks = watch.ElapsedTicks;
+                        if (statsLogCount < 60 && statsNowTicks - statsStartTicks >= freq)
+                        {
+                            double elapsedSec = (statsNowTicks - statsStartTicks) / (double)freq;
+                            double capFps = statsCapCount / elapsedSec;
+                            double sentFps = statsSentCount / elapsedSec;
+                            double avgCapMs = statsCapCount > 0 ? statsCapTicks * 1000.0 / freq / statsCapCount : 0.0;
+                            double avgEncMs = statsCapCount > 0 ? statsEncTicks * 1000.0 / freq / statsCapCount : 0.0;
+                            double avgSendMs = statsCapCount > 0 ? statsSendTicks * 1000.0 / freq / statsCapCount : 0.0;
+
+                            statsLogCount++;
+                            MFHelpers.Log("WebStream fps cap=" + FormatOne(capFps) +
+                                " sent=" + FormatOne(sentFps) +
+                                " avgCap=" + FormatOne(avgCapMs) + "ms" +
+                                " avgEnc=" + FormatOne(avgEncMs) + "ms" +
+                                " avgSend=" + FormatOne(avgSendMs) + "ms" +
+                                " size=" + encodedWidth + "x" + encodedHeight +
+                                " enc=" + encoderName);
+
+                            statsStartTicks = statsNowTicks;
+                            statsCapCount = 0;
+                            statsSentCount = 0;
+                            statsCapTicks = 0;
+                            statsEncTicks = 0;
+                            statsSendTicks = 0;
                         }
 
                         nextFrameTicks += targetFrameTicks;
@@ -451,6 +483,37 @@ namespace ExtentDesktop.Host
                 if (hwEnc != null) try { hwEnc.Dispose(); } catch { }
                 if (swEnc != null) try { swEnc.Dispose(); } catch { }
             }
+        }
+
+        private int GetStreamMaxDimension()
+        {
+            int maxDim = _streamMaxDimensionProvider != null ? _streamMaxDimensionProvider() : 1280;
+            return maxDim < 0 ? 0 : maxDim;
+        }
+
+        private static void ResolveEncodedSize(Rectangle bounds, int maxDim, out int encodedWidth, out int encodedHeight)
+        {
+            if (maxDim > 0 && (bounds.Width > maxDim || bounds.Height > maxDim))
+            {
+                double scale = Math.Min((double)maxDim / bounds.Width, (double)maxDim / bounds.Height);
+                encodedWidth = EvenAtLeastTwo((int)Math.Round(bounds.Width * scale));
+                encodedHeight = EvenAtLeastTwo((int)Math.Round(bounds.Height * scale));
+                return;
+            }
+
+            encodedWidth = EvenAtLeastTwo(bounds.Width);
+            encodedHeight = EvenAtLeastTwo(bounds.Height);
+        }
+
+        private static int EvenAtLeastTwo(int value)
+        {
+            value &= ~1;
+            return value < 2 ? 2 : value;
+        }
+
+        private static string FormatOne(double value)
+        {
+            return value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
         }
 
         private static int ChooseBitrate(int width, int height, int fps)
